@@ -1,0 +1,33 @@
+import type { Model } from "@earendil-works/pi-ai";
+import type { Observation } from "./memory.js";
+import type { TurnState } from "./protocol.js";
+
+export interface GuardrailResult {
+  allowed: boolean;
+  reason?: string;
+  suggestion?: string;
+}
+
+export interface Guardrail {
+  name: string;
+  description: string;
+  evaluate(context: GuardrailContext): Promise<GuardrailResult>;
+}
+
+export interface PatternGuardrailRuleConfig {
+  pattern: RegExp;
+  action: "block" | "warn";
+  reason: string;
+}
+
+/** Extra guardrail policies layered on top of the runner defaults. */
+export type GuardrailConfig =
+  | { kind: "pattern"; rules: PatternGuardrailRuleConfig[] }
+  | { kind: "semantic"; model: Model<any>; policy: string };
+
+export interface GuardrailContext {
+  action: string;
+  content: string;
+  memories: Observation[];
+  session: TurnState;
+}

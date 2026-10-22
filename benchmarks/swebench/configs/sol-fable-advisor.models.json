@@ -1,0 +1,32 @@
+{
+  "defaultTier": "swebench",
+  "tiers": {
+    "swebench": {
+      "routes": {
+        "general": {
+          "description": "Backend, systems, data, CLI, and other implementation or debugging work, including tests and code changes.",
+          "target": {
+            "modelName": "gpt-6-sol",
+            "thinkingLevel": "xhigh"
+          },
+          "visionFallbackModelName": "kimi-k3"
+        }
+      },
+      "advisor": {
+        "enabled": true,
+        "target": {
+          "modelName": "fable-5.1",
+          "thinkingLevel": "high"
+        },
+        "minStepsBetween": 5
+      }
+    }
+  },
+  "classifier": {
+    "target": {
+      "modelName": "typesafe-ai/jev"
+    },
+    "everySteps": 5,
+    "guidance": "Prefer continuity when the task has not materially changed, but switch routes when the work changes domains."
+  }
+}

@@ -1,0 +1,147 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, spyOn } from "bun:test";
+import dedent from "dedent";
+import { runSkillsCommand } from "../src/cli/skills.js";
+import { testIfDocker } from "./helpers/docker-only.js";
+
+type SkillsCliOutput = {
+  skills: Array<{ name: string; description?: string; path: string; scope: string }>;
+  collisions: Array<{ name: string; winnerPath: string; loserPath: string }>;
+};
+
+function captureSkillsCli(args: string[]): { stdout: string; stderr: string } {
+  let stdout = "";
+  let stderr = "";
+  const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString();
+    return true;
+  });
+  const stderrSpy = spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString();
+    return true;
+  });
+  try {
+    runSkillsCommand(args);
+  } finally {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+  }
+  return { stdout, stderr };
+}
+
+let projectRoot: string | undefined;
+
+afterEach(async () => {
+  if (projectRoot) {
+    await rm(projectRoot, { recursive: true, force: true });
+    projectRoot = undefined;
+  }
+});
+
+async function writeSkill(
+  root: string,
+  name: string,
+  description: string,
+  body = "Skill body",
+): Promise<string> {
+  const skillDir = join(root, name);
+  await mkdir(skillDir, { recursive: true });
+  const filePath = join(skillDir, "SKILL.md");
+  await writeFile(
+    filePath,
+    dedent`
+      ---
+      name: ${name}
+      description: ${description}
+      ---
+
+      ${body}
+    `,
+  );
+  return skillDir;
+}
+
+describe("CLI skills command", () => {
+  // The `relay-pi skills` JSON contract is locked at the CLI boundary so any tool
+  // consuming the command's stdout stays stable across refactors.
+  testIfDocker("prints { skills, collisions } JSON on stdout with nothing on stderr", async () => {
+    const root = (projectRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-skills-")));
+    const skillDir = await writeSkill(
+      join(root, ".relay-pi", "skills"),
+      "deploy",
+      "Deploy the app.",
+    );
+
+    const { stdout, stderr } = captureSkillsCli(["--workdir", root]);
+    const parsed = JSON.parse(stdout) as SkillsCliOutput;
+    // Built-in skills (e.g. /relay) ride alongside user/project entries in
+    // the CLI output; this test is scoped to the project shape, so drop them.
+    const projectSkills = parsed.skills.filter((s) => s.scope !== "builtin");
+
+    expect(stderr).toBe("");
+    expect(parsed.collisions).toEqual([]);
+    expect(projectSkills).toEqual([
+      {
+        name: "deploy",
+        description: "Deploy the app.",
+        path: skillDir,
+        scope: "project",
+      },
+    ]);
+  });
+
+  testIfDocker("surfaces name collisions in the JSON collisions key, not on stderr", async () => {
+    const root = (projectRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-skills-")));
+    // Two skills with the same name in different scopes — .relay-pi wins over
+    // .agents because .relay-pi is scanned first.
+    const winner = await writeSkill(
+      join(root, ".relay-pi", "skills"),
+      "release",
+      "Cut a release (canonical).",
+    );
+    const loser = await writeSkill(
+      join(root, ".agents", "skills"),
+      "release",
+      "Cut a release (shadowed).",
+    );
+
+    const { stdout, stderr } = captureSkillsCli(["--workdir", root]);
+    const parsed = JSON.parse(stdout) as SkillsCliOutput;
+    const projectSkills = parsed.skills.filter((s) => s.scope !== "builtin");
+
+    expect(stderr).toBe("");
+    expect(projectSkills.map((skill) => skill.path)).toEqual([winner]);
+    expect(parsed.collisions).toEqual([
+      {
+        name: "release",
+        winnerPath: join(winner, "SKILL.md"),
+        loserPath: join(loser, "SKILL.md"),
+      },
+    ]);
+  });
+
+  testIfDocker("reports the project scope for .agents skills too", async () => {
+    const root = (projectRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-skills-")));
+    const skillDir = await writeSkill(
+      join(root, ".agents", "skills"),
+      "review",
+      "Review code before committing.",
+    );
+
+    const { stdout, stderr } = captureSkillsCli(["--workdir", root]);
+    const parsed = JSON.parse(stdout) as SkillsCliOutput;
+    const projectSkills = parsed.skills.filter((s) => s.scope !== "builtin");
+
+    expect(stderr).toBe("");
+    expect(projectSkills).toEqual([
+      {
+        name: "review",
+        description: "Review code before committing.",
+        path: skillDir,
+        scope: "project",
+      },
+    ]);
+  });
+});

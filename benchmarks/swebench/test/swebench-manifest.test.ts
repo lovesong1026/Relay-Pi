@@ -1,0 +1,450 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+import {
+  CAMPAIGN_CONFIGS,
+  renderCampaignConfigs,
+  serializeModelsJson,
+} from "../src/config-override.js";
+import { testIfDocker } from "./helpers/docker-only.js";
+import { PINNED_DATASET_REVISION } from "../src/fetch-dataset.js";
+import {
+  CAMPAIGN_GOLD_EXCLUSIONS,
+  LANGUAGES,
+  REPO_LANGUAGE,
+  selectManifest,
+  selectPilotInstanceIds,
+  serializeManifest,
+  type DatasetRow,
+  type DatasetSnapshot,
+  type InstanceManifest,
+} from "../src/manifest.js";
+import { BUILT_IN_ROUTING_TABLE, validateRoutingTable } from "../../../src/model-routing/table.js";
+import { routingCatalogAdapter } from "../../../src/model-resolution/resolver.js";
+
+function fixtureSnapshot(): DatasetSnapshot {
+  const rows: DatasetRow[] = [];
+  for (const [repo, language] of Object.entries(REPO_LANGUAGE)) {
+    for (let index = 0; index < 5; index += 1) {
+      rows.push({
+        repo,
+        instanceId: `${language.replaceAll("+", "p").toLowerCase()}__${repo.replaceAll("/", "__")}-${index}`,
+        baseCommit: `${index}`.repeat(40),
+        problemStatement: `Fix ${language} fixture ${index}`,
+      });
+    }
+  }
+  return { datasetRevision: "fixture-revision", rows };
+}
+
+function changedPaths(left: unknown, right: unknown, path = ""): string[] {
+  if (Object.is(left, right)) return [];
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return [path];
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  return [...new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)])].flatMap((key) =>
+    changedPaths(leftRecord[key], rightRecord[key], path ? `${path}.${key}` : key),
+  );
+}
+
+describe("SWE-bench manifest", () => {
+  testIfDocker(
+    "materializes a manifest from the frozen snapshot without a live dataset",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "relay-pi-swebench-manifest-"));
+      const outputPath = join(root, "manifest.json");
+      const repoRoot = resolve(import.meta.dir, "..", "..", "..");
+      try {
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            "benchmarks/swebench/cli.ts",
+            "manifest",
+            "update",
+            "--size",
+            "9",
+            "--seed",
+            "123",
+            "--output",
+            outputPath,
+          ],
+          {
+            cwd: repoRoot,
+            env: { ...process.env, HTTPS_PROXY: "http://127.0.0.1:1" },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [exitCode, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stderr).text(),
+        ]);
+
+        expect(stderr).toBe("");
+        expect(exitCode).toBe(0);
+        const manifest = JSON.parse(await readFile(outputPath, "utf8")) as InstanceManifest;
+        expect(manifest.datasetRevision).toBe(PINNED_DATASET_REVISION);
+        expect(manifest.entries.map((entry) => entry.instanceId)).toEqual([
+          "babel__babel-15649",
+          "fluent__fluentd-4598",
+          "fmtlib__fmt-3863",
+          "laravel__framework-53949",
+          "preactjs__preact-3763",
+          "projectlombok__lombok-3312",
+          "prometheus__prometheus-13845",
+          "redis__redis-12472",
+          "sharkdp__bat-2835",
+        ]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  test("ships the exact pinned dataset snapshot used by the fresh fifty-task manifest", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "manifests", "multilingual-50-fresh-20265471.json"),
+        "utf8",
+      ),
+    ) as InstanceManifest;
+    const snapshot = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "dataset", `multilingual-test-${PINNED_DATASET_REVISION}.json`),
+        "utf8",
+      ),
+    ) as DatasetSnapshot;
+
+    expect(snapshot.datasetRevision).toBe(manifest.datasetRevision);
+    expect(snapshot.rows).toHaveLength(300);
+    for (const entry of manifest.entries) {
+      expect(snapshot.rows.find((row) => row.instanceId === entry.instanceId)).toMatchObject({
+        repo: entry.repo,
+        baseCommit: entry.baseCommit,
+      });
+    }
+  });
+
+  test("selects a byte-identical, revision-pinned nine-language sample", () => {
+    const snapshot = fixtureSnapshot();
+    const first = selectManifest(snapshot, { seed: 12345, size: 30 });
+    const second = selectManifest(
+      { ...snapshot, rows: [...snapshot.rows].reverse() },
+      { seed: 12345, size: 30 },
+    );
+
+    expect(serializeManifest(first)).toBe(serializeManifest(second));
+    expect(first.datasetRevision).toBe("fixture-revision");
+    expect(first.excludedInstanceIds).toEqual([]);
+    expect(first.entries).toHaveLength(30);
+    const counts = LANGUAGES.map(
+      (language) => first.entries.filter((entry) => entry.language === language).length,
+    );
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+    expect(counts.every((count) => count > 0)).toBe(true);
+    expect(first.entries.every((entry) => REPO_LANGUAGE[entry.repo] === entry.language)).toBe(true);
+  });
+
+  test("replaces an incompatible task without perturbing other language buckets", () => {
+    const snapshot = fixtureSnapshot();
+    const original = selectManifest(snapshot, { seed: 12345, size: 30 });
+    const excludedEntry = original.entries.find((entry) => entry.language === "C++")!;
+    const replacement = selectManifest(snapshot, {
+      seed: 12345,
+      size: 30,
+      excludedInstanceIds: [excludedEntry.instanceId],
+    });
+
+    expect(replacement.excludedInstanceIds).toEqual([excludedEntry.instanceId]);
+    expect(replacement.entries.map((entry) => entry.instanceId)).not.toContain(
+      excludedEntry.instanceId,
+    );
+    expect(replacement.entries).toHaveLength(30);
+    for (const language of LANGUAGES.filter((candidate) => candidate !== "C++")) {
+      expect(replacement.entries.filter((entry) => entry.language === language)).toEqual(
+        original.entries.filter((entry) => entry.language === language),
+      );
+    }
+  });
+
+  test("selects a seeded pilot with one instance per language", () => {
+    const manifest = selectManifest(fixtureSnapshot(), { seed: 12345, size: 30 });
+    const first = selectPilotInstanceIds(manifest, { seed: 67890, size: 3 });
+    const second = selectPilotInstanceIds(manifest, { seed: 67890, size: 3 });
+    const entriesById = new Map(manifest.entries.map((entry) => [entry.instanceId, entry]));
+
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(3);
+    expect(new Set(first.map((id) => entriesById.get(id)!.language)).size).toBe(3);
+  });
+
+  test("rejects unclassified repositories instead of guessing", () => {
+    const snapshot = fixtureSnapshot();
+    snapshot.rows.push({
+      repo: "unknown/repo",
+      instanceId: "unknown__repo-1",
+      baseCommit: "a",
+      problemStatement: "Unknown repository fixture",
+    });
+
+    expect(() => selectManifest(snapshot, { seed: 1, size: 30 })).toThrow(
+      "Unknown SWE-bench Multilingual repository: unknown/repo.",
+    );
+  });
+
+  test("commits the selected values and every language, not only the expected size", async () => {
+    const path = join(import.meta.dir, "..", "manifests", "multilingual-30.json");
+    const manifest = JSON.parse(await readFile(path, "utf8")) as ReturnType<typeof selectManifest>;
+
+    expect(manifest.datasetRevision).toBe("2b7aced941b4873e9cad3e76abbae93f481d1beb");
+    expect(manifest.seed).toBe(20_260_720);
+    expect(manifest.algorithmVersion).toBe("language-stratified-v2");
+    expect(manifest.excludedInstanceIds).toEqual(Object.keys(CAMPAIGN_GOLD_EXCLUSIONS).sort());
+    expect(manifest.entries.map((entry) => entry.instanceId)).toEqual(
+      manifest.entries.map((entry) => entry.instanceId).sort(),
+    );
+    expect(
+      Object.fromEntries(
+        LANGUAGES.map((language) => [
+          language,
+          manifest.entries.filter((entry) => entry.language === language).length,
+        ]),
+      ),
+    ).toEqual({
+      C: 3,
+      "C++": 3,
+      Go: 4,
+      Java: 4,
+      JavaScript: 3,
+      TypeScript: 3,
+      PHP: 3,
+      Ruby: 4,
+      Rust: 3,
+    });
+    expect(manifest.entries.every((entry) => REPO_LANGUAGE[entry.repo] === entry.language)).toBe(
+      true,
+    );
+    expect(
+      manifest.entries.filter((entry) => entry.language === "C++").map((entry) => entry.instanceId),
+    ).toEqual(["fmtlib__fmt-1683", "fmtlib__fmt-2457", "fmtlib__fmt-3729"]);
+  });
+
+  test("freezes a fresh fifty-task sample without reusing the prior manifest", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "manifests", "multilingual-50-fresh-20265471.json"),
+        "utf8",
+      ),
+    ) as ReturnType<typeof selectManifest>;
+    const priorManifest = JSON.parse(
+      await readFile(join(import.meta.dir, "..", "manifests", "multilingual-30.json"), "utf8"),
+    ) as ReturnType<typeof selectManifest>;
+    const priorInstanceIds = new Set(priorManifest.entries.map((entry) => entry.instanceId));
+
+    expect(manifest.seed).toBe(20_265_471);
+    expect(manifest.entries).toHaveLength(50);
+    expect(manifest.entries.filter((entry) => priorInstanceIds.has(entry.instanceId))).toEqual([]);
+    expect(
+      Object.fromEntries(
+        LANGUAGES.map((language) => [
+          language,
+          manifest.entries.filter((entry) => entry.language === language).length,
+        ]),
+      ),
+    ).toEqual({
+      C: 6,
+      "C++": 6,
+      Go: 6,
+      Java: 5,
+      JavaScript: 5,
+      TypeScript: 5,
+      PHP: 6,
+      Ruby: 5,
+      Rust: 6,
+    });
+  });
+
+  test("extends the cost panel to fifty disjoint language-balanced tasks", async () => {
+    const panel = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "manifests", "multilingual-27-cost-panels-20260723.json"),
+        "utf8",
+      ),
+    ) as InstanceManifest;
+    const extension = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "manifests", "multilingual-23-cost-extension-20260723.json"),
+        "utf8",
+      ),
+    ) as InstanceManifest;
+    const freshFifty = JSON.parse(
+      await readFile(
+        join(import.meta.dir, "..", "manifests", "multilingual-50-fresh-20265471.json"),
+        "utf8",
+      ),
+    ) as InstanceManifest;
+    const panelIds = new Set(panel.entries.map((entry) => entry.instanceId));
+    const combined = [...panel.entries, ...extension.entries];
+    const extensionIds = extension.entries.map((entry) => entry.instanceId);
+
+    expect(extensionIds).toEqual([
+      "apache__lucene-12196",
+      "astral-sh__ruff-15356",
+      "astral-sh__ruff-15394",
+      "astral-sh__ruff-15443",
+      "axios__axios-4738",
+      "babel__babel-15649",
+      "briannesbitt__carbon-2762",
+      "briannesbitt__carbon-2813",
+      "caddyserver__caddy-4774",
+      "caddyserver__caddy-5404",
+      "facebook__docusaurus-9183",
+      "fastlane__fastlane-19765",
+      "fluent__fluentd-3640",
+      "fmtlib__fmt-2317",
+      "fmtlib__fmt-3248",
+      "fmtlib__fmt-3272",
+      "gin-gonic__gin-1805",
+      "google__gson-2134",
+      "jqlang__jq-2598",
+      "jqlang__jq-2839",
+      "laravel__framework-48636",
+      "preactjs__preact-3689",
+      "redis__redis-10068",
+    ]);
+    expect(extension.entries).toEqual(
+      freshFifty.entries.filter((entry) => extensionIds.includes(entry.instanceId)),
+    );
+    expect(extension.entries.filter((entry) => panelIds.has(entry.instanceId))).toEqual([]);
+    expect(
+      Object.fromEntries(
+        LANGUAGES.map((language) => [
+          language,
+          combined.filter((entry) => entry.language === language).length,
+        ]),
+      ),
+    ).toEqual({
+      C: 6,
+      "C++": 6,
+      Go: 6,
+      Java: 5,
+      JavaScript: 5,
+      TypeScript: 5,
+      PHP: 6,
+      Ruby: 5,
+      Rust: 6,
+    });
+  });
+
+  test("commits a pilot subset that matches its recorded selection seed", async () => {
+    const manifest = JSON.parse(
+      await readFile(join(import.meta.dir, "..", "manifests", "multilingual-30.json"), "utf8"),
+    ) as ReturnType<typeof selectManifest>;
+    for (const filename of ["pilot-3-v2.json", "pilot-3-v3.json"]) {
+      const campaign = JSON.parse(
+        await readFile(join(import.meta.dir, "..", "campaigns", filename), "utf8"),
+      ) as { instanceIds: string[]; instanceSelectionSeed: number };
+
+      expect(campaign.instanceIds).toEqual(
+        selectPilotInstanceIds(manifest, {
+          seed: campaign.instanceSelectionSeed,
+          size: campaign.instanceIds.length,
+        }),
+      );
+    }
+  });
+});
+
+describe("SWE-bench routing renders", () => {
+  test("materializes eight valid custom-tier tables with explicit targets", () => {
+    const renders = renderCampaignConfigs();
+
+    expect(Object.keys(renders)).toEqual(Object.keys(CAMPAIGN_CONFIGS));
+    for (const table of Object.values(renders)) {
+      expect(table.defaultTier).toBe("swebench");
+      expect(Object.keys(table.tiers)).toEqual(["swebench"]);
+      expect(validateRoutingTable(table, routingCatalogAdapter)).toEqual([]);
+      expect(table.classifier).toEqual(BUILT_IN_ROUTING_TABLE.classifier);
+      expect(table.tiers.swebench!.routes.general!.description).toBe(
+        BUILT_IN_ROUTING_TABLE.tiers.balanced.routes.implement.description,
+      );
+      expect(table.tiers.swebench!.routes.general!.visionFallbackModelName).toBe("kimi-k3");
+      expect(table.tiers.swebench!.advisor.minStepsBetween).toBe(
+        BUILT_IN_ROUTING_TABLE.tiers.frontier.advisor.minStepsBetween,
+      );
+    }
+
+    expect(renders["glm-pure"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "glm-5.3",
+      thinkingLevel: "xhigh",
+    });
+    expect(renders["glm-pure"].tiers.swebench!.advisor.target).toEqual({
+      modelName: "kimi-k3",
+      thinkingLevel: "medium",
+    });
+    expect(renders["kimi-pure"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "kimi-k3",
+      thinkingLevel: "high",
+    });
+    expect(renders["kimi-pure"].tiers.swebench!.advisor.target).toEqual({
+      modelName: "fable-5.1",
+      thinkingLevel: "high",
+    });
+    expect(renders["opus-pure"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "opus-5.5",
+      thinkingLevel: "xhigh",
+    });
+    expect(renders["opus-pure"].tiers.swebench!.advisor).toMatchObject({
+      enabled: false,
+      target: { modelName: "fable-5.1", thinkingLevel: "high" },
+    });
+    expect(renders["sol-fable-advisor"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "gpt-6-sol",
+      thinkingLevel: "xhigh",
+    });
+    expect(renders["sol-fable-advisor"].tiers.swebench!.advisor).toMatchObject({
+      enabled: true,
+      target: { modelName: "fable-5.1", thinkingLevel: "high" },
+    });
+    expect(renders["opus-fable-advisor"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "opus-5.5",
+      thinkingLevel: "xhigh",
+    });
+    expect(renders["opus-fable-advisor"].tiers.swebench!.advisor).toMatchObject({
+      enabled: true,
+      target: { modelName: "fable-5.1", thinkingLevel: "high" },
+    });
+    expect(renders["fable-pure"].tiers.swebench!.routes.general!.target).toEqual({
+      modelName: "fable-5.1",
+      thinkingLevel: "high",
+    });
+    expect(renders["fable-pure"].tiers.swebench!.advisor).toMatchObject({
+      enabled: false,
+      target: { modelName: "fable-5.1", thinkingLevel: "high" },
+    });
+  });
+
+  test("changes exactly one advisor boolean inside each paired comparison", () => {
+    const renders = renderCampaignConfigs();
+
+    expect(changedPaths(renders["glm-pure"], renders["glm-kimi-advisor"])).toEqual([
+      "tiers.swebench.advisor.enabled",
+    ]);
+    expect(changedPaths(renders["kimi-pure"], renders["kimi-fable-advisor"])).toEqual([
+      "tiers.swebench.advisor.enabled",
+    ]);
+  });
+
+  test("keeps every committed routing file byte-identical to its renderer", async () => {
+    const renders = renderCampaignConfigs();
+    for (const name of Object.keys(CAMPAIGN_CONFIGS) as (keyof typeof CAMPAIGN_CONFIGS)[]) {
+      const path = join(import.meta.dir, "..", "configs", `${name}.models.json`);
+      expect(await readFile(path, "utf8")).toBe(serializeModelsJson(renders[name]));
+    }
+  });
+});

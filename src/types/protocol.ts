@@ -1,0 +1,939 @@
+import type { ImageContent, TextContent, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { RouterSwitch } from "../model-routing/router.js";
+import type { TransportName } from "../model-resolution/catalog.js";
+import type { TaskDescriptor, TaskId, TaskSettlement } from "../tasks/types.js";
+
+export type { TaskDescriptor, TaskId, TaskSettlement, TaskSnapshot } from "../tasks/types.js";
+
+import type { AgentSession } from "./agent.js";
+import type { ObservationalMemoryActivityEvent } from "./memory.js";
+import type { StateMachineDefinition, StateMachineSession } from "./state-machine.js";
+
+/**
+ * TurnRunner Protocol
+ *
+ * A JSON-friendly command/event protocol for operating Relay Pi turn runners.
+ * The transport is intentionally unspecified. A CLI, daemon, HTTP server, or
+ * parent process can all speak this protocol as long as they can send commands
+ * and consume streamed events.
+ *
+ * The protocol is not a comm layer. It is the control surface for the
+ * runner itself:
+ *
+ * - commands tell the runner what to do
+ * - turn events report work during the turn and end each turn
+ *
+ * ## Turn Model
+ *
+ * The runner is a stateful turn executor: `start` bootstraps the current
+ * `TurnState`, and each terminal event returns the next snapshot. The session
+ * is the persistence owner. It assigns session ids, hydrates stored snapshots
+ * before start, persists terminal snapshots, schedules wakeups, and can run an
+ * unbounded number of turn-runner turns for the same user session.
+ *
+ * A caller initializes a session by sending `start`. This is a setup command,
+ * not a turn: the runner loads memory and skills, emits `turn_started`
+ * with the initial empty `TurnState`, and returns. Skills, agent files, and
+ * skill collisions are exposed through `getSkills()`, `getResolvedAgentFiles()`,
+ * and `getSkillCollisions()` for callers (CLI/TUI) that want to render a
+ * setup summary; no agent work runs until the caller sends a follow-up.
+ *
+ * Once the session is set up, callers run turns by sending one of:
+ *
+ * - `prompt`: send a user prompt against the current state
+ * - `answer`: answer questions from the previous terminal `ask` event
+ * - `wake`: resume a sleeping session for one scheduled state-machine step
+ *
+ * Each turn emits any number of during-turn events, including task lifecycle,
+ * agent steps, state snapshots, and diagnostics. The turn ends with exactly one
+ * terminal event:
+ * `complete`, `ask`, `interrupted`, or `sleep`.
+ * Terminal events carry the turn runner-owned state needed to continue a later turn.
+ * `complete` means this turn-runner turn ended; it does not mean the session
+ * session is finished. A user can follow up with another prompt for the same
+ * session; the runner continues from its internally held `TurnState`. The
+ * agent session is always present because the agent owns the conversation
+ * history and, for state-machine mode, drives state transitions.
+ *
+ * ## Scenario 1: One-Shot Agent Task
+ *
+ * The user asks for a normal task, such as "summarize this file" or "fix this
+ * bug." The caller sends `start` (omitting `mode` or setting `mode: "auto"`)
+ * to set the session up; the runner emits `turn_started` with an empty
+ * `state.agent`. When the user types their first prompt, the caller sends a
+ * `prompt` command and the runner classifies it as agent mode and emits:
+ *
+ * 1. zero or more `step`, `todos`, `follow_up_queue`, or `log` events
+ * 2. `complete` with the final answer and updated `state.agent`
+ *
+ * This behaves like a normal agent runner. There is no state-machine UI because
+ * the session is not a long-running business process.
+ *
+ * ## Scenario 2: Auto-Selected State Machine
+ *
+ * The user asks for a task with a complex lifecycle, such as "prospect this
+ * customer until they book a meeting" or "implement this change, open a PR, and
+ * watch it until merge." With `mode: "auto"`, the first `prompt` after `start`
+ * routes through the runner, which chooses a state machine and populates
+ * `state.stateMachine` on the next emitted state.
+ *
+ * During the turn, the runner emits events that the UI can render directly:
+ *
+ * - `state_machine` carries the full state-machine session snapshot
+ * - `step` shows textual progress, reasoning, tool calls, or system messages
+ * - `todos` shows current task progress
+ * - `follow_up_queue` shows prompts waiting for the current turn chain to finish
+ * - `task_started`, `task_output`, and `task_settled` expose task lifecycle changes
+ * - `log` shows diagnostic messages
+ *
+ * The UI can always render `state.agent` as the conversation transcript. When it
+ * also sees `state.stateMachine`, it can render a Kanban board for the state
+ * machine. Each `state_machine` event moves the visible session card to the
+ * current state column and updates the lifecycle status.
+ *
+ * ### Scenario 2a: User Follow-Up Interrupts The Turn
+ *
+ * While the state machine is running, the user can send a `prompt` command with
+ * `behavior: "steer"`. The runner should treat this as additional user
+ * context for the active pi session. For example, the user might say "I've
+ * already received this email" while the state machine is waiting for a reply.
+ * The runner agent can incorporate that message, update the state-machine
+ * state, and then continue the same state-machine session instead of abandoning it.
+ *
+ * A typical stream is:
+ *
+ * 1. `step` events while the agent incorporates the user's update
+ * 2. more `state_machine` events as the updated state machine continues
+ * 3. a terminal event (`complete`, `ask`, `sleep`, or `interrupted`) carrying
+ *    the updated `state`
+ *
+ * ### Scenario 2b: Scheduled States Use Sleep
+ *
+ * A state machine might send an email and then wait for a reply, or pause until
+ * a specific timestamp. Recurring external checks should be modeled as poll
+ * states, not as user-owned infinite polling scripts. Absolute waits should be
+ * modeled as timer states. When scheduled work needs to wait, the runner emits
+ * a terminal `sleep` event with `wakeAt`.
+ *
+ * The layer above the runner persists the state, schedules a wakeup for `wakeAt`,
+ * and starts the runner again at that time. On each wake, the runner performs
+ * the scheduled poll attempt or completes the timer state. Once scheduled work
+ * finishes, the runner records it in the state-machine session and continues to
+ * the next state.
+ *
+ * If the user sends a prompt while the session is sleeping on a
+ * scheduled state, the session cancels the pending wake, runs that prompt
+ * as a normal turn-runner turn, and returns the session to `sleep` if the state
+ * machine is still waiting. The user should not see a stable `complete` state
+ * while the business process is actually waiting on something external.
+ *
+ * ### Scenario 2c: Interrupting State-Machine Work
+ *
+ * An interrupt stops active turn-runner work for the current turn. If a state-machine
+ * session is active, interruption also records an interrupted state-machine
+ * terminal marker. Scheduled wakeups are owned by the session and are cancelled
+ * there. A later user prompt starts a new turn from the interrupted state; the
+ * parent agent can choose the right continuation.
+ *
+ * ## Scenario 3: Explicit State Machine Definition
+ *
+ * A caller can pass a full `StateMachineDefinition` as `mode`. The definition
+ * is a set of possible states the runner may use, not a command to force every
+ * prompt into that state machine.
+ *
+ * If the user's prompt matches the definition, the runner runs that state
+ * machine directly and emits the same state-machine events as Scenario 2.
+ *
+ * If the user's prompt does not fit the provided definition, the runner should
+ * answer normally in agent mode. Conceptually, the selected state can be
+ * `undefined`: none of the possible states fit the user's request.
+ */
+
+/**
+ * Top-level execution mode for a prompt.
+ *
+ * - "agent": handle the prompt as a normal one-shot/current-session agent session.
+ * - "auto": let the runner classify which mode the prompt needs. Auto sessions
+ *   may create new state-machine definitions over time, even after a previous
+ *   state machine reached a terminal state.
+ * - StateMachineDefinition: use this explicit set of possible states when it fits.
+ *   Explicit-definition sessions are constrained to this definition; if none of its
+ *   states fit, the selected state can be undefined and the runner can answer normally.
+ */
+export type TurnMode = "agent" | "auto" | StateMachineDefinition;
+
+export type TurnRunnerTerminalStatus = "completed" | "failed" | "cancelled";
+
+export type TurnStateStatus =
+  | "running"
+  | "waiting_for_human"
+  | "sleeping"
+  | "interrupted"
+  | TurnRunnerTerminalStatus;
+
+/** TurnRunner-owned state snapshot needed to continue a later turn. */
+export interface TurnState {
+  /** Lifecycle of the current turn state, regardless of agent or state-machine mode. */
+  status: TurnStateStatus;
+  /**
+   * The mode originally used to start the session. This is required on resume so
+   * "auto" sessions can keep creating definitions while explicit-definition sessions
+   * stay constrained to their provided state set.
+   */
+  mode: TurnMode;
+  /**
+   * Effective runtime options for future turns. Persisted separately from agent
+   * transcripts so model, memory model, and thinking level survive resume even
+   * when process defaults change.
+   */
+  options?: TurnOptions;
+  /** The agent conversation is always present, including state-machine sessions. */
+  agent: AgentSession;
+  /** Present when this session is executing in state-machine mode. */
+  stateMachine?: StateMachineSession;
+  /**
+   * A completed worker whose parent still owes a next-state selection. Retained
+   * across suspension/restart so continuing retries the decision, not the work.
+   * The output remains in state-machine history rather than being duplicated.
+   * Cleared only when a new state is successfully selected.
+   */
+  pendingStateTransition?: { stateName: string };
+
+  /**
+   * Current todo list written by the todo tool. Persisted with the turn state so
+   * resumed runners preserve the same work plan instead of starting with an
+   * empty tool-local list.
+   */
+  todos?: TurnTodo[];
+  /**
+   * User-visible follow-up prompts waiting to be delivered. The runner mirrors
+   * this into pi-agent follow-up queues when a parent agent is active. Each
+   * entry is a subset of `TurnPromptCommand` (its `message` and optional
+   * `images`), persisted alongside state so resumed runners can replay the
+   * same multimodal payload they would have delivered live.
+   */
+  followUpQueue?: TurnFollowUpQueueEntry[];
+  /**
+   * Commands accepted by the runner but not yet executed because active work
+   * could not absorb them. These are replayed after resume in the original
+   * order when the runner can safely continue.
+   */
+  queuedCommands?: TurnCommand[];
+  /**
+   * Durable task descriptors used to reconstruct the live task set after a
+   * snapshot or process restart. `running` tasks hold the current process
+   * awake; `scheduled` tasks permit sleep until their `wakeAt`; terminal task
+   * statuses hold nothing open. Descriptors persist because identity,
+   * ownership, and lifecycle must survive hydration. Their runtime promises
+   * and AbortControllers are process-bound and are deliberately never stored;
+   * hydration marks formerly running work `lost` rather than pretending its
+   * executor survived.
+   */
+  tasks?: TaskDescriptor[];
+  /**
+   * Retained output captured for process-bound tasks so crash recovery can tell the
+   * next parent pass what each lost executor last reported. Entries use task ids as
+   * keys and retain at most the final three chunks, capped to their last 1,500
+   * characters, so recovery context cannot make the durable snapshot unbounded.
+   */
+  taskOutputTails?: Partial<Record<TaskId, string[]>>;
+  /**
+   * Lost task ids whose crash-recovery context has not yet been attached to a
+   * parent pass. Persisting this delivery marker prevents repeated process
+   * restarts from silently dropping the reminder before the parent can act on it.
+   */
+  pendingLostTaskReminderTaskIds?: TaskId[];
+  /**
+   * Numeric suffix to allocate for the next task id. Persisting the allocator
+   * alongside descriptors keeps ids monotonic even when terminal descriptors
+   * have been compacted or a process resumes from state.json.
+   */
+  nextTaskId?: number;
+  /**
+   * Persisted wire-shaping state. Carries the sticky eviction horizon and
+   * any future wire-shaping fields across resume so a compacted session
+   * keeps its trimmed wire-tail — the durable transcript still holds the
+   * full history, but the next outgoing prompt continues to ship only the
+   * post-horizon slice. Absent on fresh sessions; the runner falls back
+   * to `createInitialHorizon()`.
+   */
+  wireGuardHorizon?: WireGuardHorizon;
+}
+
+/**
+ * Sticky eviction point for the actor agent's wire-tail. Pi-agent re-runs
+ * `transformContext` on every turn against the full untransformed history;
+ * if the projection's cut moved every turn, the prompt-cache prefix would
+ * be invalidated each time. By pinning the cut to a timestamp that only
+ * advances, the dropped prefix stays content-deterministic across turns
+ * and subsequent turns re-hit the provider's prompt cache.
+ *
+ * The runtime keeps a single mutable instance per runner (held by
+ * `TurnRunner.wireGuardHorizon` and referenced from the observational
+ * context transform). It is round-tripped through `TurnState` so resume
+ * preserves the trimmed wire-tail; advances when the observational
+ * context transform's auto-trigger fires, when
+ * `tryRecoverFromContextOverflow` reacts to a provider overflow error,
+ * or when the user invokes `compact`.
+ *
+ * Defined as an object (rather than a bare timestamp) so future
+ * wire-shaping fields land here and persist alongside the horizon
+ * without a schema change.
+ */
+export interface WireGuardHorizon {
+  /** Messages with `timestamp <= evictionHorizon` are dropped from the wire. */
+  evictionHorizon: number;
+}
+
+/**
+ * How a follow-up prompt should be delivered while a pi session is active.
+ *
+ * - "steer": deliver as an interruption/steering message to the active pi agent.
+ * - "follow_up": queue until the active pi agent finishes its current turn.
+ */
+export type TurnPromptBehavior = "steer" | "follow_up";
+
+export interface TurnOptions {
+  /** Model override for the user-visible agent turn, as shorthand or provider:modelId. */
+  model?: string;
+  /**
+   * Model override for observational memory extraction and reflection, in
+   * shorthand or provider:modelId format. When omitted, memory work uses the runner's
+   * configured `memoryModel`, then the default memory model.
+   */
+  memoryModel?: string;
+  thinkingLevel?: ThinkingLevel;
+}
+
+export interface TurnQuestionOption {
+  /** Display label shown to the user. */
+  label: string;
+  /** Optional extra context for the option. */
+  description?: string;
+}
+
+export interface TurnQuestion {
+  /** Question text shown to the user. */
+  question: string;
+  /** Optional section heading for grouped questions. */
+  header?: string;
+  /** Available answers. */
+  options: TurnQuestionOption[];
+  /** Whether multiple options can be selected. */
+  multiSelect?: boolean;
+}
+
+export type TurnTodoStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export interface TurnTodo {
+  /** Stable identifier used by todo edits to replace an existing work item. */
+  id: string;
+  /** Stable UI-facing label for the work item. */
+  content: string;
+  /** Current progress state for the work item. */
+  status: TurnTodoStatus;
+}
+
+/** Token accounting mirrors pi's Usage shape so runner events can forward provider usage without renaming fields. */
+export type TurnTokenUsage = Usage;
+
+export type TurnStep =
+  | {
+      type: "text_delta";
+      /** Partial assistant text streamed before the canonical `text` step arrives. */
+      delta: string;
+    }
+  | {
+      type: "reasoning_delta";
+      /** Partial reasoning streamed before the canonical `reasoning` step arrives. */
+      delta: string;
+    }
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string }
+  | {
+      /**
+       * A tool call has started executing. This is the transient precursor to
+       * the canonical `tool_call` step, the way `text_delta` precedes `text`.
+       */
+      type: "tool_call_start";
+      toolName: string;
+      /** Correlates this start with its canonical `tool_call` step. */
+      toolCallId: string;
+      /** Tool arguments as parsed by the model. Shape is tool-specific. */
+      input?: Record<string, any>;
+    }
+  | {
+      /**
+       * The canonical record of a finished tool call. Like the `text` step
+       * after `text_delta`, it is self-contained: it echoes the call's
+       * `input` alongside the result so consumers can render the finished
+       * call without stitching state from the earlier `tool_call_start`.
+       */
+      type: "tool_call";
+      toolName: string;
+      /** Matches the `toolCallId` of the `tool_call_start` step that began this call. */
+      toolCallId: string;
+      /** Tool arguments echoed from the matching `tool_call_start`. */
+      input?: Record<string, any>;
+      /** Whether the tool finished with an error. */
+      isError: boolean;
+      /** Tool result content. */
+      output?: (TextContent | ImageContent)[];
+      /** Tool-specific structured result metadata used for machine-readable outcomes. */
+      details?: unknown;
+    }
+  | { type: "system"; message: string };
+
+/**
+ * HTTP MCP server configuration.
+ *
+ * The runner connects via the streamable-HTTP transport, lists the server's
+ * tools at start, and exposes them to the agent under names of the form
+ * `{server}__{tool}`. Authentication is intentionally out of scope: pass any
+ * credentials the server expects through `headers`.
+ */
+export interface McpHttpServerConfig {
+  /** Transport tag. Only `"http"` is supported today. */
+  type: "http";
+  /** Absolute http or https URL of the remote MCP endpoint. */
+  url: string;
+  /** Extra HTTP headers sent on every request to this server. */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Set up a new turn-runner session.
+ *
+ * `start` is a setup command, not a turn. The runner loads memory and skills,
+ * stores its initial `TurnState` (either fresh or the resumed one passed via
+ * `state`), and emits `turn_started`. No agent work runs. The caller sends
+ * `prompt` afterwards to actually run a turn. Skills, agent files, and skill
+ * collisions are exposed through dedicated runner methods so callers can
+ * render the setup summary without subscribing to a dedicated event.
+ *
+ * The CLI/TUI sends this on launch so the user sees the available skills
+ * before typing the first prompt.
+ */
+export interface TurnStartCommand {
+  type: "start";
+  /** Routing mode for subsequent prompts. Omit to use the turn runner's configured default. */
+  mode?: TurnMode;
+  /**
+   * Existing state to resume. When provided, the runner emits `turn_started`
+   * with this state instead of creating a fresh one. Resumed sessions keep
+   * their persisted agent and state-machine history.
+   */
+  state?: TurnState;
+  /**
+   * Session-scoped runtime options. These are fixed when the runner starts so
+   * the parent pi-agent keeps a stable model, thinking level, and prompt cache
+   * shape across every pi-agent turn inside later relay-pi turns.
+   */
+  options?: TurnOptions;
+  /**
+   * Remote MCP servers to connect to before the first turn runs. Each entry's
+   * tools are exposed to the parent and state agents under namespaced names.
+   * Connection failures are logged and skipped so a single broken server
+   * cannot block session setup.
+   */
+  mcpServers?: Record<string, McpHttpServerConfig>;
+}
+
+/**
+ * Image attachment carried alongside a prompt's text. The data is base64-encoded
+ * raw image bytes (no `data:` URL prefix) and `mimeType` is the standard
+ * `image/png`, `image/jpeg`, etc. label vision-capable models expect.
+ *
+ * Attachments are passed verbatim to the underlying agent as multimodal user
+ * content; the surrounding `message` text remains the prompt's primary body.
+ */
+export interface TurnPromptImage {
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * Pending follow-up prompt waiting to be replayed against the parent agent.
+ *
+ * Shape is a subset of `TurnPromptCommand` (the user-facing prompt fields,
+ * minus `behavior`, which is implicit — every queued entry runs as a
+ * follow-up). Persisted with `TurnState.followUpQueue` so resumed sessions
+ * deliver the same multimodal payload the original turn would have.
+ */
+export interface TurnFollowUpQueueEntry {
+  message: string;
+  images?: TurnPromptImage[];
+}
+
+/**
+ * Send a new user prompt against the runner's current state.
+ *
+ * Callers may send prompt commands even while a previous `turn()` call is
+ * active. The turn runner maps `behavior` onto the active pi agent when it can
+ * and otherwise queues the command behind active non-agent work. State is held
+ * inside the runner; it was bootstrapped at `start` and is updated from the
+ * runner's own terminal events.
+ */
+export interface TurnPromptCommand {
+  type: "prompt";
+  message: string;
+  /**
+   * Delivery behavior for this user message. The runner decides whether the
+   * parent pi-agent or state-machine work is currently driving the public
+   * relay-pi turn; that driver determines whether this reaches pi immediately
+   * or waits for state-transition context.
+   */
+  behavior: TurnPromptBehavior;
+  /**
+   * Optional image attachments delivered as multimodal content to the parent
+   * pi-agent. Empty/undefined means a plain-text prompt; the previous behavior.
+   */
+  images?: TurnPromptImage[];
+}
+
+/**
+ * Provide answers to a structured question emitted by the runner.
+ *
+ * Answers serialize into parent-agent prompt text and follow the same active
+ * turn behavior as prompts. State-agent answers also route through the parent,
+ * which can inspect state-machine history and select the appropriate state.
+ */
+export interface TurnAnswerCommand {
+  type: "answer";
+  questions: TurnQuestion[];
+  /**
+   * Selected option labels per question, keyed by `question.question`.
+   * Always an array so single-select and multi-select share one shape; a
+   * single-select answer is a one-element array, and an empty array means
+   * the user advanced past a multi-select question without picking anything.
+   */
+  answers: Record<string, string[]>;
+  /** Same delivery behavior as prompts after the answers are serialized. */
+  behavior: TurnPromptBehavior;
+  /**
+   * Optional free-form prompt appended after the serialized answer XML.
+   * Lets the user flush partial answers and a new instruction in one turn
+   * when they decide to type instead of finishing the picker.
+   */
+  message?: string;
+  /**
+   * Optional image attachments delivered alongside the synthesized prompt,
+   * matching `TurnPromptCommand.images` semantics.
+   */
+  images?: TurnPromptImage[];
+}
+
+/** Wake the runner's sleeping state. If the state is not waiting on scheduled work, this is a no-op. */
+export interface TurnWakeCommand {
+  type: "wake";
+}
+
+/**
+ * Replace the currently visible follow-up queue.
+ *
+ * This is an out-of-band edit command for UI clients. It mirrors the queue into
+ * the active pi agent when possible, but the protocol event is emitted from the
+ * runner-owned prompt list so clients can render and edit it directly.
+ */
+export interface TurnEditFollowUpQueueCommand {
+  type: "edit_follow_up_queue";
+  /** Full replacement queue, in the order prompts should be delivered. */
+  prompts: TurnFollowUpQueueEntry[];
+}
+
+/**
+ * Commands that drive a single turn-runner turn. `start` is excluded because
+ * setup is not a turn and is handled by `TurnRunner.start()` directly.
+ */
+export type TurnCommand = TurnPromptCommand | TurnAnswerCommand | TurnWakeCommand;
+
+/** Out-of-band control message that interrupts the currently running turn. */
+export interface TurnInterruptCommand {
+  type: "interrupt";
+}
+
+/**
+ * Out-of-band control message that compacts the runner's wire-visible
+ * message tail. The durable transcript in `TurnState.agent.messages` is
+ * **not** mutated — the runner instead advances its sticky wire-shaping
+ * eviction horizon so the next request to the actor model dispatches a
+ * smaller prompt. Scrollback, resume, and observer/reflector passes all
+ * keep their full history.
+ *
+ * Target selection (against the current wire-tail, not the durable
+ * transcript):
+ *  - When the wire-tail currently occupies more than 20% of the parent
+ *    agent's effective context window, the target is that 20% ceiling —
+ *    leaving 80% headroom for system prompt, memory packs, the next user
+ *    prompt, and the next assistant response.
+ *  - When the wire-tail is already under 20%, the target halves the
+ *    current wire-tail tokens instead. `compact` is user-initiated, so
+ *    an already-light session still produces visible relief rather than
+ *    silently no-opping.
+ *
+ * Unlike the automatic wire-shaping trigger (which only fires when the
+ * actor's context-window budget is breached), `compact` runs even when
+ * the wire is already under that budget, so callers can free context on
+ * demand.
+ *
+ * `compact` does not start or end a turn. It is rejected with a soft
+ * warning when a turn chain is in flight — mutating the horizon
+ * mid-stream would invalidate the request the parent (or a state agent)
+ * is already dispatching. Poll/timer sleeps have already resolved the
+ * chain by the time they emit their `sleep` terminal, so compact runs
+ * cleanly during those waits; callers only need to defer compact while a
+ * turn is actively dispatching.
+ */
+export interface TurnCompactCommand {
+  type: "compact";
+}
+
+export type TurnRunnerCommand =
+  | TurnStartCommand
+  | TurnCommand
+  | TurnInterruptCommand
+  | TurnEditFollowUpQueueCommand
+  | TurnCompactCommand;
+
+/** RPC transport envelope for commands whose delivery must be correlated. */
+export type RpcTurnCommand = TurnCommand & { requestId: string };
+
+/** Commands accepted by the newline-delimited RPC transport. */
+export type RpcRunnerCommand =
+  | TurnStartCommand
+  | RpcTurnCommand
+  | TurnInterruptCommand
+  | TurnEditFollowUpQueueCommand
+  | TurnCompactCommand;
+
+/** A system-prompt file that was resolved on disk for the session. */
+export interface TurnAgentFile {
+  /** Configured file name relative to the working directory, e.g. "AGENTS.md". */
+  name: string;
+  /** Absolute path on disk. */
+  path: string;
+}
+
+export interface TurnStartedEvent {
+  type: "turn_started";
+  /** Full turn state after applying config/options/auto routing. */
+  state: TurnState;
+}
+
+export interface TurnStepEvent {
+  type: "step";
+  step: TurnStep;
+  /**
+   * Set when a task-backed subagent produced the step. Absent for the parent
+   * agent; correlate `taskId` with `task_started` for its name and role.
+   */
+  origin?: TurnEventOrigin;
+}
+
+/** Identifies the task runtime that produced a non-parent event. */
+export interface TurnEventOrigin {
+  /** Stable identity shared by spawned and state-machine subagents. */
+  taskId: TaskId;
+}
+
+/** Emitted once after a task id is allocated and its descriptor becomes observable. */
+export interface TurnTaskStartedEvent {
+  type: "task_started";
+  /** Full durable descriptor at task start. */
+  task: TaskDescriptor;
+  /** Present when another task runtime caused this lifecycle change. */
+  origin?: TurnEventOrigin;
+}
+
+/** Emitted for one newly appended task-output chunk while the turn remains open. */
+export interface TurnTaskOutputEvent {
+  type: "task_output";
+  taskId: TaskId;
+  /**
+   * Delta output only; consumers append chunks in event order. This is not a
+   * cumulative replay. Late attach and explicit task_output requests obtain
+   * the cumulative buffered snapshot from TaskManager instead.
+   */
+  chunk: string;
+  /** Present when another task runtime caused this lifecycle change. */
+  origin?: TurnEventOrigin;
+}
+
+/** Emitted once when a task reaches a terminal lifecycle status. */
+export interface TurnTaskSettledEvent {
+  type: "task_settled";
+  /** Terminal value, including whether work completed, failed, stopped, or was lost. */
+  settlement: TaskSettlement;
+  /** Present when another task runtime caused this lifecycle change. */
+  origin?: TurnEventOrigin;
+}
+
+/**
+ * RPC transport liveness signal emitted while in-process tasks keep a turn
+ * open. It is transport telemetry rather than model activity: runners do not
+ * add it to agent transcripts, routing observations, or memory.
+ */
+export interface TurnHeartbeatEvent {
+  type: "heartbeat";
+  /** Timestamp from the RPC transport's runtime clock. */
+  timestamp: number;
+  /** Running task ids that currently require the RPC process to stay awake. */
+  activeTaskIds: TaskId[];
+}
+
+export interface TurnTodosEvent {
+  type: "todos";
+  todos: TurnTodo[];
+}
+
+export interface TurnFollowUpQueueEvent {
+  type: "follow_up_queue";
+  /** Prompts currently waiting to run as follow-ups after active work settles. */
+  followUpQueue: TurnFollowUpQueueEntry[];
+}
+
+export interface TurnStateMachineEvent {
+  type: "state_machine";
+  /**
+   * Full session snapshot so one event has everything a UI needs to
+   * render the relay. `stateMachine.progress.states[name].runs > 0`
+   * is the "already ran" signal.
+   */
+  stateMachine: StateMachineSession;
+}
+
+export interface TurnMemoryEvent extends ObservationalMemoryActivityEvent {
+  type: "memory";
+}
+
+/**
+ * Per-segment estimate of how many tokens currently occupy each region of
+ * the parent agent's input. Distinct from `TurnTokenUsage`, which reports
+ * the flat provider-side totals: this breakdown attributes the occupancy
+ * to the segments the runner controls, so surfaces can show *which* part
+ * of the budget is filling up. Values are heuristic character-length
+ * estimates, not exact tokenizer counts.
+ *
+ * On `usage` events, the runner rescales these four fields so their sum
+ * equals the latest parent assistant message's `totalTokens` from the
+ * provider. The event's `usage` field carries the *running turn aggregate*,
+ * while this breakdown describes the latest parent input — the two
+ * intentionally have different denominators.
+ */
+export interface TurnContextWindowUsage {
+  /**
+   * Tokens occupied by the parent agent's full system prompt, including
+   * the base coding-agent prompt, any user-supplied `systemInstructions`,
+   * and every system-prompt file loaded from disk (typically `AGENTS.md`).
+   */
+  systemPrompt: number;
+  /**
+   * Tokens occupied by the raw message history that will be sent on the
+   * next turn. Includes the latest assistant response just appended to
+   * state. Synthetic memory wrappers re-injected by the transform on each
+   * request are not counted; they are transient.
+   */
+  messages: number;
+  /**
+   * Tokens occupied by the current session's local memory pack rendered
+   * into the actor prefix. Sums the `content` field of every observation
+   * and reflection in the frozen local pack.
+   */
+  localMemory: number;
+  /**
+   * Tokens occupied by the cross-session global memory pack rendered into
+   * the actor prefix. Sums the `content` field of every observation and
+   * reflection in the frozen global pack.
+   */
+  globalMemory: number;
+}
+
+/**
+ * Token-accounting payload shared by the `usage` during-event and every
+ * terminal event. Bundling these fields under one interface keeps the
+ * during stream and terminal events in lockstep: every `usage` event and
+ * every terminal event sees the same shape, and a consumer that only reads
+ * terminals can still recover the running aggregate plus the latest parent
+ * context bar.
+ *
+ * Two distinct token totals are reported:
+ *  - `turnUsage` is a per-turn aggregate across every successfully recorded LLM
+ *    call (parent worker, state agents, classifier, advisor, and memory workers).
+ *    Use it for cost accounting and "what did this turn cost" readouts. It is
+ *    not comparable to `effectiveContextWindow` because the cap is per-request.
+ *  - `lastMessageUsage` is the exact provider-reported usage of the
+ *    most recent parent assistant message. Use it for context-window
+ *    pressure surfaces ("X / cap"): `lastMessageUsage.totalTokens` is
+ *    the true occupancy of the parent's window on the latest call, and
+ *    `contextWindowUsage` provides a heuristic segment breakdown over
+ *    the same total.
+ */
+export interface TurnUsageFields {
+  /**
+   * Running turn aggregate: the sum of every model `usage` recorded so far in
+   * this turn, including parent, state-agent, classifier, advisor, and memory
+   * calls. Always cumulative; never a single-call delta.
+   */
+  turnUsage: TurnTokenUsage;
+  /**
+   * Same aggregate as `turnUsage`, partitioned by the model that produced
+   * each call — so a relay turn whose state agents ran on a different model
+   * than the parent can be attributed per model. The invariant
+   * `sum(usageByModel[].usage.cost.total) === turnUsage.cost.total` holds.
+   * Empty array when no usage has been recorded yet.
+   */
+  usageByModel: ModelUsageEntry[];
+  /**
+   * Provider-reported usage from the latest parent assistant message.
+   * Refreshed on every parent `message_end` and held stable while only state
+   * agents or auxiliary calls advance `turnUsage`. This is the accurate number
+   * to display against `effectiveContextWindow` — it reflects exactly what
+   * the API counted on the most recent parent call (`input` is fresh
+   * input, `cacheRead` + `cacheWrite` are the cache hits/writes, and
+   * `totalTokens` is their sum plus `output`).
+   */
+  lastMessageUsage: TurnTokenUsage;
+  /**
+   * Effective ceiling against which `lastMessageUsage.totalTokens` should
+   * be displayed. Reflects the user-set `TurnRunnerConfig.effectiveContext`
+   * (default 200k) clamped to the model's hard context window. Every
+   * memory budget is derived from this same value, so the bar also
+   * represents the practical compaction ceiling. Tracks the latest parent
+   * emission; stays stable when only a state agent advanced
+   * `turnUsage`.
+   */
+  effectiveContextWindow: number;
+  /**
+   * Heuristic per-segment breakdown of how the latest parent message's
+   * input is allocated across the system prompt, raw message history, and
+   * the two memory pack layers. Lets surfaces visualize *which* budget is
+   * filling up. Rescaled so its four fields sum exactly to
+   * `lastMessageUsage.totalTokens`, so consumers can drive the bar's
+   * segment widths from this breakdown while keeping the absolute scale
+   * grounded in the accurate provider total. Like `effectiveContextWindow`,
+   * this mirrors the latest parent emission and does not move on
+   * state-agent ticks.
+   */
+  contextWindowUsage: TurnContextWindowUsage;
+}
+
+/**
+ * One model-and-transport slice of a turn's usage. A fallback can use the
+ * same logical model on two providers, so consumers must not merge rows by
+ * model id alone.
+ */
+export interface ModelUsageEntry {
+  /** Provider-specific model id reported by the model runtime. */
+  model: string;
+  /** Backend that carried the call and whether its cost is subscription-covered. */
+  transport: {
+    provider: TransportName;
+    billing: "plan-covered" | "metered";
+  };
+  /** Tokens and cost accumulated for this exact model/provider pair. */
+  usage: TurnTokenUsage;
+}
+
+/**
+ * Emitted after a parent context snapshot exists and metered usage advances.
+ * `turnUsage` includes every recorded parent, state-agent, classifier, advisor,
+ * and memory call; the context fields remain scoped to the latest parent call.
+ */
+export interface TurnUsageEvent extends TurnUsageFields {
+  type: "usage";
+  /**
+   * Set when this usage tick was emitted at a task-backed subagent boundary.
+   * Absent for parent-driven ticks so consumers can attribute running cost.
+   */
+  origin?: TurnEventOrigin;
+}
+
+/**
+ * Terminal events embed the same payload optionally: the runner always
+ * attaches the final running aggregate plus the latest parent snapshot
+ * when at least one assistant message has been recorded this turn. An
+ * early terminal that did no LLM work (e.g. an immediate `ask` before
+ * any message) may omit them.
+ */
+export interface TurnTerminalBaseEvent extends Partial<TurnUsageFields> {
+  state: TurnState;
+}
+
+export interface TurnAskEvent extends TurnTerminalBaseEvent {
+  type: "ask";
+  questions: TurnQuestion[];
+}
+
+export interface TurnCompletedEvent extends TurnTerminalBaseEvent {
+  type: "complete";
+  status: TurnRunnerTerminalStatus;
+  result?: string;
+  error?: string;
+}
+
+export interface TurnInterruptedEvent extends TurnTerminalBaseEvent {
+  type: "interrupted";
+}
+
+export interface TurnSleepEvent extends TurnTerminalBaseEvent {
+  type: "sleep";
+  /** Unix timestamp in milliseconds when the outer layer should wake the runner. */
+  wakeAt: number;
+}
+
+export interface TurnSystemEvent {
+  type: "system";
+  level: "debug" | "info" | "warn" | "error";
+  message: string;
+}
+
+/**
+ * A concrete model or reasoning-effort change selected by a virtual-model
+ * router. Derived from the router's own switch shape so the two can never
+ * drift — the runner emits `{ type: "router_switch", ...switched }`.
+ */
+export interface TurnRouterSwitchEvent extends RouterSwitch {
+  type: "router_switch";
+  /** Present only if a future independently-routed child agent emits the switch. */
+  origin?: TurnEventOrigin;
+}
+
+/** Events emitted while the runner is still working on the current turn. */
+export type TurnDuringEvent =
+  | TurnStepEvent
+  | TurnHeartbeatEvent
+  | TurnTaskStartedEvent
+  | TurnTaskOutputEvent
+  | TurnTaskSettledEvent
+  | TurnTodosEvent
+  | TurnFollowUpQueueEvent
+  | TurnStateMachineEvent
+  | TurnMemoryEvent
+  | TurnUsageEvent
+  | TurnSystemEvent
+  | TurnRouterSwitchEvent;
+
+/** Events that end the current turn. */
+export type TurnTerminalEvent =
+  | TurnAskEvent
+  | TurnCompletedEvent
+  | TurnInterruptedEvent
+  | TurnSleepEvent;
+
+export type TurnEvent = TurnStartedEvent | TurnDuringEvent | TurnTerminalEvent;
+
+/** RPC-only delivery receipt; runner subscribers never observe this event. */
+export interface RpcCommandAcceptedEvent {
+  type: "command_accepted";
+  requestId: string;
+  commandType: RpcTurnCommand["type"];
+}
+
+/** Private host recovery snapshot; never part of the user-visible event history. */
+export interface RpcCheckpointEvent {
+  type: "checkpoint";
+  state: TurnState;
+}
+
+/** Complete newline-delimited output union for `relay-pi --rpc`. */
+export type RpcEvent = TurnEvent | RpcCommandAcceptedEvent | RpcCheckpointEvent;

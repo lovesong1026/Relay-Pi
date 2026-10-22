@@ -1,0 +1,234 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runConfigCommand } from "../src/cli/config.js";
+import { parseRouteArgs, runRouteCommand } from "../src/cli/route.js";
+import { testIfDocker } from "./helpers/docker-only.js";
+import { BUILT_IN_ROUTING_TABLE, type ClassifierTarget } from "../src/model-routing/table.js";
+
+describe("parseRouteArgs", () => {
+  test("parses tier, images, JSON, and a multi-word prompt", () => {
+    expect(
+      parseRouteArgs(["--model", "balanced", "--images", "--json", "fix", "the", "layout"]),
+    ).toEqual({
+      model: "balanced",
+      images: true,
+      json: true,
+      help: false,
+      prompt: "fix the layout",
+    });
+  });
+
+  test("rejects unknown options and missing model values", () => {
+    expect(() => parseRouteArgs(["--unknown", "work"])).toThrow("Unknown route option");
+    expect(() => parseRouteArgs(["--model"])).toThrow("Missing value for --model");
+  });
+
+  test("parses transport explanation output without changing the default report", () => {
+    expect(parseRouteArgs(["--explain", "route this"])).toMatchObject({
+      explain: true,
+      prompt: "route this",
+    });
+  });
+
+  test("parses advisor-preview with an optional stored session id", () => {
+    expect(parseRouteArgs(["advisor-preview", "--session", "session_fixture"])).toEqual({
+      images: false,
+      json: false,
+      help: false,
+      advisorPreview: true,
+      session: "session_fixture",
+    });
+    expect(() => parseRouteArgs(["advisor-preview", "--session"])).toThrow(
+      "Missing value for --session",
+    );
+  });
+});
+
+describe("runRouteCommand", () => {
+  const originalRouterKey = process.env.OPENROUTER_API_KEY;
+  let routeCwd: string;
+
+  beforeAll(async () => {
+    routeCwd = await mkdtemp(join(tmpdir(), "relay-pi-route-built-in-"));
+  });
+
+  beforeEach(() => {
+    process.env.OPENROUTER_API_KEY = "openrouter-route-key";
+  });
+
+  afterEach(() => {
+    if (originalRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalRouterKey;
+  });
+
+  afterAll(async () => {
+    if (routeCwd) await rm(routeCwd, { recursive: true, force: true });
+  });
+
+  test("prints the stable JSON decision shape with a stubbed classifier", async () => {
+    let output = "";
+    let classifierDelta: string | undefined;
+    let classifierTarget: ClassifierTarget | undefined;
+    const ticks = [100, 137];
+    const result = await runRouteCommand(["--json", "implement the parser"], {
+      cwd: routeCwd,
+      write: (text) => {
+        output += text;
+      },
+      now: () => ticks.shift()!,
+      classify: async (input, options) => {
+        classifierDelta = input.lastStepDelta;
+        classifierTarget = options.target;
+        return {
+          route: "implement",
+          probabilities: { general: 0.12, implement: 0.82, writing: 0.06 },
+        };
+      },
+    });
+
+    expect(JSON.parse(output)).toEqual({
+      tier: "frontier",
+      route: "implement",
+      model: "sol",
+      effort: "medium",
+      probabilities: { general: 0.12, implement: 0.82, writing: 0.06 },
+      resolutionChain: ["frontier"],
+      tableSource: "built-in",
+      latencyMs: 37,
+    });
+    expect(result).toEqual(JSON.parse(output));
+    expect(classifierDelta).toBe("implement the parser");
+    expect(classifierTarget).toEqual(BUILT_IN_ROUTING_TABLE.classifier.target);
+  });
+
+  test("explains the concrete transport without changing the default output shape", async () => {
+    let output = "";
+    await runRouteCommand(["--explain", "implement the parser"], {
+      cwd: routeCwd,
+      write: (text) => {
+        output += text;
+      },
+      classify: async () => ({
+        route: "implement",
+        probabilities: { implement: 0.82, general: 0.12, writing: 0.06 },
+      }),
+    });
+
+    expect(output).toContain(
+      "Transport: openrouter modelId=openai/gpt-6.1-sol reason=router_order planCovered=false",
+    );
+    expect(output).toContain("Confidence: implement 0.82 · general 0.12 · writing 0.06");
+  });
+
+  test("prints the chat classifier's rationale instead of a distribution", async () => {
+    let output = "";
+    const result = await runRouteCommand(["--json", "implement the parser"], {
+      cwd: routeCwd,
+      write: (text) => {
+        output += text;
+      },
+      classify: async () => ({ route: "implement", rationale: "The request asks for code." }),
+    });
+
+    expect(JSON.parse(output)).toMatchObject({
+      route: "implement",
+      rationale: "The request asks for code.",
+    });
+    expect(result).not.toHaveProperty("probabilities");
+
+    output = "";
+    await runRouteCommand(["implement the parser"], {
+      cwd: routeCwd,
+      write: (text) => {
+        output += text;
+      },
+      classify: async () => ({ route: "implement", rationale: "The request asks for code." }),
+    });
+    expect(output).toContain("Rationale: The request asks for code.");
+    expect(output).not.toContain("Confidence:");
+  });
+
+  test("surfaces an unknown tier before calling the classifier", async () => {
+    let classifierCalled = false;
+    await expect(
+      runRouteCommand(["--model", "missing", "prompt"], {
+        classify: async () => {
+          classifierCalled = true;
+          return { route: "general" };
+        },
+      }),
+    ).rejects.toThrow('Unknown virtual model tier "missing".');
+    expect(classifierCalled).toBe(false);
+  });
+
+  testIfDocker(
+    "prints a read-only advisor preview for the newest stored fixture session",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "relay-pi-advisor-preview-policy-"));
+      try {
+        const table = structuredClone(BUILT_IN_ROUTING_TABLE);
+        table.tiers.frontier!.advisor.enabled = true;
+        table.tiers.balanced!.advisor.enabled = false;
+        await mkdir(join(cwd, ".relay-pi"));
+        await writeFile(join(cwd, ".relay-pi", "models.json"), JSON.stringify(table));
+        let output = "";
+        const sessionsRoot = join(process.cwd(), "test", "fixtures", "advisor-preview");
+        const result = await runRouteCommand(["advisor-preview"], {
+          cwd,
+          sessionsRoot,
+          memoryDbPath: false,
+          write: (text) => {
+            output += text;
+          },
+        });
+
+        if (!result || !("transcript" in result))
+          throw new Error("Expected advisor preview result");
+        expect(result.sessionId).toBe("session_fixture");
+        expect(result.tier).toBe("frontier");
+        expect(typeof result.tokens).toBe("number");
+        expect(
+          result.estimates.map(({ tier, model, enabled }) => ({ tier, model, enabled })),
+        ).toEqual([
+          { tier: "frontier", model: "fable", enabled: true },
+          { tier: "balanced", model: "fable", enabled: false },
+        ]);
+        expect(result.estimates.every((estimate) => typeof estimate.inputUsd === "number")).toBe(
+          true,
+        );
+        expect(result.transcript).toContain("Design the model router before implementing it.");
+        expect(result.transcript).toContain('"systemPrompt"');
+        expect(result.transcript).toContain('"tools"');
+        expect(output).toContain("Session: session_fixture");
+        expect(output).toContain(`Transcript tokens: ${result.tokens}`);
+        expect(output).toContain("frontier: fable");
+        expect(output).toContain("balanced: fable (disabled)");
+        expect(output).toContain(result.transcript);
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("runConfigCommand", () => {
+  testIfDocker("exports the built-in table and refuses overwrite without --force", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "relay-pi-route-config-"));
+    try {
+      await runConfigCommand(["export"], { cwd, write: () => {} });
+      const path = join(cwd, ".relay-pi", "models.json");
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual(BUILT_IN_ROUTING_TABLE);
+      await expect(runConfigCommand(["export"], { cwd, write: () => {} })).rejects.toThrow(
+        "pass force to overwrite it",
+      );
+      await expect(
+        runConfigCommand(["export", "--force"], { cwd, write: () => {} }),
+      ).resolves.toBeUndefined();
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual(BUILT_IN_ROUTING_TABLE);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,16 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+
+export type AgentSessionStatus = "running" | "waiting" | "completed" | "failed" | "cancelled";
+
+/**
+ * Serializable state for agent mode.
+ *
+ * pi-agent-core owns the live in-process Agent instance while a turn is
+ * running. This type is the turn runner-level snapshot that terminal events can
+ * return so the layer above the runner can persist enough state to continue a
+ * later turn.
+ */
+export interface AgentSession {
+  status: AgentSessionStatus;
+  messages: AgentMessage[];
+}

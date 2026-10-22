@@ -1,0 +1,123 @@
+import { complete } from "@earendil-works/pi-ai/compat";
+import {
+  validateToolArguments,
+  type ImageContent,
+  type Model,
+  type ProviderStreamOptions,
+  type TextContent,
+  type Tool,
+  type ToolCall,
+  type Usage,
+} from "@earendil-works/pi-ai";
+import type { Static, TSchema } from "typebox";
+import { resolveModelName } from "../model-resolution/resolver.js";
+import { resolveProviderApiKey } from "../model-resolution/provider-catalog.js";
+import { usageForTransport } from "../connected-providers/billing.js";
+
+export type StructuredOutputPrompt = string | Array<TextContent | ImageContent>;
+
+export interface StructuredOutputOptions<TSchemaValue extends TSchema> {
+  model: string;
+  tool: Tool<TSchemaValue>;
+  prompt: StructuredOutputPrompt;
+  systemPrompt?: string;
+  /** Cancels the provider stream and surfaces an aborted completion to the caller. */
+  signal?: AbortSignal;
+  callOptions?: ProviderStreamOptions;
+  onUsage?: (usage: Usage) => void;
+}
+
+export async function generateStructuredOutput<TSchemaValue extends TSchema>(
+  options: StructuredOutputOptions<TSchemaValue>,
+): Promise<Static<TSchemaValue>> {
+  const model = resolveModelName(options.model);
+  // An api-dispatch `complete()` call does no provider auth resolution
+  // itself, so click here hands it the credential `resolveProviderApiKey`
+  // found. An explicit `callOptions.apiKey` still wins per-request.
+  const resolvedApiKey = options.callOptions?.apiKey ?? resolveProviderApiKey(model.provider);
+  const callerOnPayload = options.callOptions?.onPayload;
+  const response = await complete(
+    model,
+    {
+      systemPrompt: options.systemPrompt,
+      tools: [options.tool],
+      messages: [{ role: "user", content: options.prompt, timestamp: Date.now() }],
+    },
+    {
+      ...options.callOptions,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(resolvedApiKey ? { apiKey: resolvedApiKey } : {}),
+      toolChoice: forcedToolChoice(model, options.tool.name),
+      onPayload: async (payload, payloadModel) => {
+        const next = callerOnPayload ? await callerOnPayload(payload, payloadModel) : undefined;
+        const base = next ?? payload;
+        return injectResponsesToolChoice(payloadModel, base, options.tool.name);
+      },
+    },
+  );
+  options.onUsage?.(
+    usageForTransport(
+      response.usage,
+      model.provider as import("../model-resolution/catalog.js").TransportName,
+    ),
+  );
+
+  const toolCall = response.content.find((block) => isNamedToolCall(block, options.tool.name));
+  if (!toolCall) {
+    const contentTypes = response.content.map((block) => block.type).join(", ") || "empty";
+    throw new Error(
+      `Model did not call required structured output tool: ${options.tool.name}. Stop reason: ${response.stopReason}. Response content: ${contentTypes}${response.errorMessage ? `. Error: ${response.errorMessage}` : ""}`,
+    );
+  }
+
+  return validateToolArguments(options.tool, toolCall) as Static<TSchemaValue>;
+}
+
+function isNamedToolCall(block: unknown, name: string): block is ToolCall {
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    "type" in block &&
+    block.type === "toolCall" &&
+    "name" in block &&
+    block.name === name &&
+    "arguments" in block &&
+    typeof block.arguments === "object" &&
+    block.arguments !== null
+  );
+}
+
+function forcedToolChoice(model: Model<any>, toolName: string): Record<string, unknown> {
+  if (model.api === "anthropic-messages") {
+    return { type: "tool", name: toolName };
+  }
+
+  return {
+    type: "function",
+    function: { name: toolName },
+  };
+}
+
+/**
+ * pi-ai's `openai-responses` provider does not read `options.toolChoice`,
+ * so the {@link forcedToolChoice} value never reaches the OpenAI Responses
+ * API. Without `tool_choice` the model is free to answer with text, and on
+ * large inputs (e.g. the full memory-reflect pool) it does, which surfaces
+ * as `Model did not call required structured output tool`.
+ *
+ * We close the gap through `onPayload`, which lets us mutate the params
+ * pi-ai is about to send. The Responses API expects a flat
+ * `{ type: "function", name: "<tool>" }` shape (not the Chat Completions
+ * nested `{ function: { name } }`), so we inject that directly when the
+ * payload looks like the Responses request shape.
+ */
+function injectResponsesToolChoice(model: Model<any>, payload: unknown, toolName: string): unknown {
+  if (model.api !== "openai-responses" && model.api !== "azure-openai-responses") {
+    return payload;
+  }
+  if (payload === null || typeof payload !== "object") return payload;
+  return {
+    ...(payload as Record<string, unknown>),
+    tool_choice: { type: "function", name: toolName },
+  };
+}

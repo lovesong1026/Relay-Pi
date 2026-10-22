@@ -1,0 +1,528 @@
+import {
+  pinnedDefaultModel,
+  pinnedMemoryModel,
+  PROVIDER_SHORTHANDS,
+  resolveProviderShorthand,
+} from "../model-resolution/catalog.js";
+import {
+  describeModelResolution,
+  resolveCliMemoryModel,
+  resolveCliModel,
+  routingCatalogAdapter,
+  type ModelResolution,
+} from "../model-resolution/resolver.js";
+import { loadRoutingTable } from "../model-routing/loader.js";
+import { BUILT_IN_ROUTING_TABLE, type RoutingTable } from "../model-routing/table.js";
+import { DEFAULT_MEMORY_DB_PATH, SessionManager } from "../session/session-manager.js";
+import { runTui } from "../tui/app.js";
+import { applyInlineSlashCommandsToCliConfig } from "./inline-slash.js";
+import type { TurnRunnerConfig } from "../types/config.js";
+import { DEFAULT_RESUME_HISTORY_MESSAGES, printRunHelp } from "./help.js";
+import { resumeCommand } from "./resume-hint.js";
+import {
+  expandHomeDir,
+  fail,
+  isInteractive,
+  loadCliEnvFiles,
+  parseResumeHistoryMessages,
+} from "./shared.js";
+import { installShutdownHandlers } from "./shutdown.js";
+import {
+  createUpgradeStatusStream,
+  describeUpgradeStatus,
+  runAutoUpgrade,
+} from "./auto-upgrade.js";
+
+export interface CliTurnConfigInput {
+  /** Resume preserves persisted selections unless a model flag explicitly overrides them. */
+  resume?: boolean;
+  modelName?: string;
+  memoryModelName?: string;
+  /** Disable both observational database memory and curated file-memory loading. */
+  incognito?: boolean;
+  /**
+   * Explicit memory database file path. When omitted, the config falls back
+   * to {@link DEFAULT_MEMORY_DB_PATH} (`~/.relay-pi/memory.db`). Ignored when
+   * `incognito` is true, which forces `memoryDbPath: false`.
+   */
+  dbPath?: string;
+  /**
+   * Caller-owned session id used to attribute memory writes. The TUI path
+   * sets it from the active `SessionManager` session; `relay-pi --rpc` sets it
+   * from the `--session <id>` spawn flag. When set, every observation written
+   * during the process carries this id as its `session_id`, which is the axis
+   * session-scoped recall filters on.
+   */
+  sessionId?: string;
+  workDir: string;
+  systemInstructions?: string;
+  systemPromptFiles?: string[];
+}
+
+export interface CliTurnConfigResolution {
+  config: TurnRunnerConfig;
+  modelResolution: ModelResolution;
+  memoryModelResolution: ModelResolution;
+}
+
+export interface ProjectCliTurnConfigResolution extends CliTurnConfigResolution {
+  /** Validated complete replacement used for defaults and virtual-name checks at boot. */
+  routingTable: RoutingTable;
+}
+
+export interface PackageMetadata {
+  name: string;
+  version: string;
+}
+
+/**
+ * Decide whether to render the interactive TUI vs the one-shot streaming
+ * path. The TUI runs only when the terminal is interactive and the caller
+ * did not supply a prompt argument; otherwise we run a single turn against
+ * the SessionManager and exit when it settles.
+ */
+export function shouldUseTui(input: { interactive: boolean; prompt?: string }): boolean {
+  return input.interactive && !input.prompt;
+}
+
+/**
+ * Build the {@link TurnRunnerConfig} the CLI hands to the SessionManager,
+ * along with the resolutions used to render model provenance lines.
+ */
+export function buildCliTurnConfig(
+  input: CliTurnConfigInput,
+  dotenvKeys: Set<string>,
+  routingTable: RoutingTable = BUILT_IN_ROUTING_TABLE,
+): CliTurnConfigResolution {
+  const modelResolution = resolveCliModel(input.modelName, dotenvKeys, routingTable);
+  const memoryModelResolution = resolveCliMemoryModel(input.memoryModelName, dotenvKeys);
+
+  return {
+    config: {
+      ...(!input.resume || input.modelName ? { model: modelResolution.modelName } : {}),
+      ...(!input.resume || input.memoryModelName
+        ? { memoryModel: memoryModelResolution.modelName }
+        : {}),
+      memoryDbPath: input.incognito ? false : (input.dbPath ?? DEFAULT_MEMORY_DB_PATH),
+      ...(input.incognito ? { memoryStores: false } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      cwd: input.workDir,
+      ...(input.systemInstructions ? { systemInstructions: input.systemInstructions } : {}),
+      ...(input.systemPromptFiles ? { systemPromptFiles: input.systemPromptFiles } : {}),
+    },
+    modelResolution,
+    memoryModelResolution,
+  };
+}
+
+/** Load the project routing table once, then resolve the complete boot configuration against it. */
+export async function buildProjectCliTurnConfig(
+  input: CliTurnConfigInput,
+  dotenvKeys: Set<string>,
+): Promise<ProjectCliTurnConfigResolution> {
+  const loaded = await loadRoutingTable({
+    cwd: input.workDir,
+    catalogAdapter: routingCatalogAdapter,
+  });
+  return {
+    ...buildCliTurnConfig(input, dotenvKeys, loaded.table),
+    routingTable: loaded.table,
+  };
+}
+
+/**
+ * Default `relay-pi` invocation: parse flags, load env files, build the config,
+ * decide TUI vs JSON output, then drive the SessionManager through one
+ * session. Prints a resume hint at the end whether the session terminated
+ * cleanly or not.
+ */
+export async function runRunCommand(args: string[], pkg: PackageMetadata): Promise<void> {
+  let modelName: string | undefined;
+  let memoryModelName: string | undefined;
+  // Raw value of --provider so we can both pin the default model below and
+  // surface a clearer error if --model was also passed.
+  let providerFlag: string | undefined;
+  let workDir = process.cwd();
+  let resumeSessionId: string | undefined;
+  let systemInstructions: string | undefined;
+  let systemPromptFiles: string[] | undefined;
+  let resumeHistoryMessages = DEFAULT_RESUME_HISTORY_MESSAGES;
+  let resumeHistoryMessagesExplicit = false;
+  let envFilePath: string | undefined;
+  let dbPath: string | undefined;
+  let incognito = false;
+  let noAutoUpgrade = false;
+  const promptParts: string[] = [];
+  const interactive = isInteractive();
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "--model":
+      case "-m":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        modelName = args[++i];
+        break;
+      case "--memory-model":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        memoryModelName = args[++i];
+        break;
+      case "--provider":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        providerFlag = args[++i];
+        break;
+      case "--incognito":
+      case "-i":
+        incognito = true;
+        break;
+      case "--workdir":
+      case "-w":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        workDir = expandHomeDir(args[++i]!);
+        break;
+      case "--resume":
+      case "-r":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        resumeSessionId = args[++i];
+        break;
+      case "--resume-history-messages":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        try {
+          resumeHistoryMessages = parseResumeHistoryMessages(args[++i]!, args[i - 1]!);
+        } catch (error) {
+          fail(error instanceof Error ? error.message : String(error));
+        }
+        resumeHistoryMessagesExplicit = true;
+        break;
+      case "--system-prompt":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        systemInstructions = args[++i];
+        break;
+      case "--system-prompt-file":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        systemPromptFiles = [...(systemPromptFiles ?? []), args[++i]!];
+        break;
+      case "--no-system-prompt-files":
+        systemPromptFiles = [];
+        break;
+      case "--env-file":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        envFilePath = args[++i];
+        break;
+      case "--db":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        dbPath = args[++i];
+        break;
+      case "--no-auto-upgrade":
+        noAutoUpgrade = true;
+        break;
+      case "--no-skill-sync":
+        // Deprecated no-op; tolerated so host scripts that pass it do not break.
+        break;
+      case "--version":
+      case "-v":
+        console.log(pkg.version);
+        process.exit(0);
+      // eslint-disable-next-line no-fallthrough
+      case "--help":
+      case "-h":
+        printRunHelp();
+        process.exit(0);
+      // eslint-disable-next-line no-fallthrough
+      default:
+        if (args[i]?.startsWith("-")) {
+          fail(`Unknown option: ${args[i]}`);
+        }
+        promptParts.push(args[i]!);
+    }
+  }
+
+  // `let prompt: string | undefined` so the inline-slash applier can
+  // unset it when the whole prompt was just slash commands (e.g.
+  // `relay-pi "/model X"`) — mirrors the TUI's whole-message dispatcher
+  // skipping the agent turn entirely.
+  let prompt: string | undefined = promptParts.join(" ");
+
+  // Read from stdin if no prompt is provided
+  if (!prompt && !interactive) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    prompt = Buffer.concat(chunks).toString("utf-8").trim();
+  }
+
+  if (!prompt && !resumeSessionId && !interactive) {
+    console.error("Usage: relay-pi <prompt>");
+    console.error('  e.g., relay-pi "build a todo app"');
+    process.exit(1);
+  }
+
+  if (providerFlag) {
+    if (modelName || memoryModelName) {
+      fail("--provider cannot be combined with --model or --memory-model");
+    }
+    const provider = resolveProviderShorthand(providerFlag);
+    if (!provider) {
+      fail(`Unknown provider: ${providerFlag}. Accepted values: ${PROVIDER_SHORTHANDS.join(", ")}`);
+    }
+    // Pin both the chat and memory models to this provider's catalog entry
+    // so resolution skips the env-var inference that would otherwise pick
+    // a different provider when multiple keys are present.
+    modelName = pinnedDefaultModel(provider);
+    memoryModelName = pinnedMemoryModel(provider);
+  }
+
+  const dotenvKeys = loadCliEnvFiles(workDir, envFilePath);
+
+  // Probe the registry and (if newer) run the package manager in-process
+  // while the TUI is already mounted. The TUI subscribes to upgradeStatus$
+  // to render a live header line; the JSON path awaits the final status
+  // and prints one summary line to stderr.
+  //
+  // Auto-upgrade is gated on having a TTY: non-interactive invocations
+  // (e.g. `relay-pi <prompt>` exec'd by a sandbox terminal channel) often get
+  // their whole process tree torn down as soon as the command "finishes",
+  // which kills the detached npm child mid-rename and leaves the global
+  // node_modules tree in a partial state (`relay-pi/.agent-<random>`
+  // staging dirs with no `agent` symlink).
+  const nonInteractive = !process.stdin.isTTY && !process.stdout.isTTY;
+  const upgradeStatus$ = createUpgradeStatusStream();
+  const upgradePromise = runAutoUpgrade({
+    packageName: pkg.name,
+    currentVersion: pkg.version,
+    disabled: noAutoUpgrade || nonInteractive,
+    onStatus: (status) => upgradeStatus$.publish(status),
+  }).then((status) => {
+    upgradeStatus$.complete(status);
+    return status;
+  });
+
+  const builtConfig = await buildProjectCliTurnConfig(
+    {
+      ...(modelName ? { modelName } : {}),
+      ...(memoryModelName ? { memoryModelName } : {}),
+      incognito,
+      resume: Boolean(resumeSessionId),
+      ...(dbPath ? { dbPath } : {}),
+      workDir,
+      ...(systemInstructions ? { systemInstructions } : {}),
+      ...(systemPromptFiles ? { systemPromptFiles } : {}),
+    },
+    dotenvKeys,
+  );
+  const { config, memoryModelResolution, routingTable } = builtConfig;
+  let { modelResolution } = builtConfig;
+  modelName = modelResolution.modelName;
+  memoryModelName = memoryModelResolution.modelName;
+
+  const useTui = shouldUseTui({ interactive, prompt });
+
+  // Apply inline `/model` and `/thinking` commands embedded in the
+  // non-TUI one-shot prompt before we hand the prompt to the session.
+  // The prompt text itself is passed through to the agent verbatim,
+  // mirroring how the TUI keeps the slash form in the message and how
+  // `/skill-name` references survive the dispatch.
+  if (!useTui && prompt) {
+    const configuredModel = config.model;
+    const { residue } = applyInlineSlashCommandsToCliConfig(
+      prompt,
+      config,
+      (line) => process.stderr.write(line),
+      routingTable,
+    );
+    // Sync the cached display name so the boot summary lines reflect any
+    // inline override, including whether the retained selection is routed.
+    modelName = config.model ?? modelName;
+    if (config.model !== configuredModel) {
+      modelResolution = resolveCliModel(modelName, dotenvKeys, routingTable);
+    }
+    // Dispatch the prompt with the slash forms stripped out. When the
+    // whole prompt was just slash commands (e.g. `relay-pi "/model X"`),
+    // the residue is empty and we skip the agent turn entirely —
+    // mirrors the TUI's whole-message dispatcher returning before
+    // reaching dispatchTurn.
+    prompt = residue.length > 0 ? residue : undefined;
+  }
+
+  // One-shot consumers want a single summary line, not a streaming status.
+  // Await the final upgrade status and print the human-readable form (if any)
+  // before the regular boot lines. The TUI subscribes to the live stream
+  // instead and renders intermediate "Checking…/Updating…" states inline.
+  if (!useTui) {
+    const finalStatus = await upgradePromise;
+    const notice = describeUpgradeStatus(pkg.name, finalStatus);
+    if (notice) process.stderr.write(`${notice}\n`);
+    if (!resumeSessionId) {
+      process.stderr.write(`Model: ${modelName}\n`);
+      process.stderr.write(`Source: ${describeModelResolution(modelResolution)}\n`);
+      process.stderr.write(`Memory model: ${memoryModelName}\n`);
+      process.stderr.write(`Memory source: ${describeModelResolution(memoryModelResolution)}\n`);
+    }
+  }
+
+  const manager = new SessionManager({
+    ...config,
+    model: config.model ?? modelResolution.modelName,
+    memoryModel: config.memoryModel ?? memoryModelResolution.modelName,
+  });
+  if (!useTui) {
+    // Non-TUI runs (one-shot prompt, piped stdin) stream events as JSONL so
+    // CI scripts can parse them. The TUI subscribes to its own rendering
+    // pipeline and has no use for stdout JSONL.
+    manager.subscribe(({ event }) => {
+      process.stdout.write(`${JSON.stringify(event)}\n`);
+    });
+  }
+
+  // Ensure PGlite gets a chance to flush its WAL on Ctrl+C / SIGTERM. The
+  // `finally` block below handles normal returns and thrown errors, but
+  // signals bypass it and would otherwise leave the memory database dirty.
+  const removeShutdownHandlers = installShutdownHandlers(() => manager.dispose());
+
+  try {
+    const session = resumeSessionId
+      ? manager.resume(resumeSessionId)
+      : manager.create({
+          ...(config.mode ? { mode: config.mode } : {}),
+          ...(useTui || !prompt ? {} : { prompt }),
+        });
+    let resumedHistory: import("@earendil-works/pi-agent-core").AgentMessage[] | undefined;
+
+    if (resumeSessionId) {
+      if (modelResolution.source !== "explicit") session.config.model = undefined;
+      if (memoryModelResolution.source !== "explicit") session.config.memoryModel = undefined;
+      // Force-load the persisted state.json so setup hands the resumed
+      // state to the runner and any TUI history replays before new turns.
+      await session.hydrate();
+      if (!session.getState()) {
+        throw new Error(`Unknown session: ${resumeSessionId}`);
+      }
+      // Setup runs against the hydrated state; manager.create() already
+      // dispatched setup for fresh sessions.
+      await session.start();
+      modelName = session.config.model ?? modelName;
+      memoryModelName = session.config.memoryModel ?? memoryModelName;
+      // Explicit launch preferences survive clear and subsequent picker resumes,
+      // including concrete selections recovered from an older saved command.
+      if (modelResolution.source === "explicit") manager.config.model = modelName;
+      if (memoryModelResolution.source === "explicit") manager.config.memoryModel = memoryModelName;
+      if (!useTui) {
+        process.stderr.write(`Model: ${modelName}\n`);
+        process.stderr.write(
+          `Source: ${modelResolution.source === "explicit" ? "explicit CLI flag" : "saved session selection"}\n`,
+        );
+        process.stderr.write(`Memory model: ${memoryModelName}\n`);
+        process.stderr.write(
+          `Memory source: ${memoryModelResolution.source === "explicit" ? "explicit CLI flag" : "saved session selection"}\n`,
+        );
+      }
+      resumedHistory = session.getState()?.agent.messages;
+    }
+
+    if (prompt && resumeSessionId) {
+      await session.prompt({ message: prompt });
+      await session.waitForTerminal();
+    } else if (prompt && !resumeSessionId) {
+      await session.waitForTerminal();
+    }
+
+    // Live session pointer for the TUI loop below. Starts as the boot-time
+    // session (fresh or `--resume <id>`-hydrated) and gets re-pointed each
+    // time the user picks a "pick up the thread" row in the starter menu.
+    // Same code path as `--resume <id>` from the command line: dispose the
+    // current session, `manager.resume(newId)` + `hydrate()` + `start()`,
+    // re-enter `runTui` with the hydrated session and its message history.
+    let activeSession = session;
+    let activeHistory = resumedHistory;
+    let activeIsResume = Boolean(resumeSessionId);
+
+    if (useTui) {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        let pendingResumeSessionId: string | undefined;
+        let pendingClear = false;
+        await runTui({
+          session: activeSession,
+          ...(activeHistory ? { history: activeHistory } : {}),
+          ...(activeIsResume ? { isResume: true } : {}),
+          onResumeRequest: (id: string) => {
+            pendingResumeSessionId = id;
+          },
+          onClearRequest: () => {
+            pendingClear = true;
+          },
+          resumeHistoryMessages,
+          modelName: activeSession.config.model ?? modelName,
+          modelSource:
+            activeIsResume && modelResolution.source !== "explicit"
+              ? "saved session selection"
+              : describeModelResolution(modelResolution),
+          memoryModelName: activeSession.config.memoryModel ?? memoryModelName,
+          memoryModelSource:
+            activeIsResume && memoryModelResolution.source !== "explicit"
+              ? "saved session selection"
+              : describeModelResolution(memoryModelResolution),
+          workDir,
+          sessionId: activeSession.id,
+          packageName: pkg.name,
+          packageVersion: pkg.version,
+          upgradeStatus$,
+        });
+
+        if (pendingClear) {
+          // `/clear` from the slash dispatcher: drop the current session
+          // (flushing state.json) and start a fresh one. The new session
+          // boots with starters visible — same as launching `relay-pi`
+          // without `--resume`.
+          await activeSession.dispose();
+          activeSession = manager.create(config.mode ? { mode: config.mode } : {});
+          await activeSession.start();
+          activeHistory = undefined;
+          activeIsResume = false;
+          continue;
+        }
+
+        if (!pendingResumeSessionId) break;
+
+        // User picked a recent session from the starter menu. Swap the
+        // placeholder for the requested session: dispose first so its
+        // state.json gets flushed, then hydrate the resume target so
+        // `agent.messages` is available for transcript replay.
+        await activeSession.dispose();
+        activeSession = manager.resume(pendingResumeSessionId);
+        if (modelResolution.source !== "explicit") activeSession.config.model = undefined;
+        if (memoryModelResolution.source !== "explicit")
+          activeSession.config.memoryModel = undefined;
+        await activeSession.hydrate();
+        if (!activeSession.getState()) {
+          throw new Error(`Unknown session: ${pendingResumeSessionId}`);
+        }
+        await activeSession.start();
+        activeHistory = activeSession.getState()?.agent.messages;
+        activeIsResume = true;
+      }
+    }
+
+    modelName = activeSession.config.model ?? modelName;
+    memoryModelName = activeSession.config.memoryModel ?? memoryModelName;
+    process.stderr.write(
+      `To resume this session:\n${resumeCommand(activeSession.id, {
+        ...(modelName ? { modelName } : {}),
+        ...(memoryModelName ? { memoryModelName } : {}),
+        workDir,
+        incognito,
+        ...(dbPath ? { dbPath } : {}),
+        ...(systemInstructions ? { systemInstructions } : {}),
+        ...(systemPromptFiles ? { systemPromptFiles } : {}),
+        ...(envFilePath ? { envFilePath } : {}),
+        ...(resumeHistoryMessagesExplicit ? { resumeHistoryMessages } : {}),
+      })}\n`,
+    );
+  } catch (err: any) {
+    console.error(`Fatal: ${err.message}`);
+    process.exitCode = 1;
+  } finally {
+    removeShutdownHandlers();
+    await manager.dispose();
+  }
+}

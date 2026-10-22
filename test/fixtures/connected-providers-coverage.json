@@ -1,0 +1,96 @@
+{
+  "fable": {
+    "fable-5.1": {
+      "openai-codex": null,
+      "github-copilot": "claude-fable-5.1"
+    },
+    "fable-5": {
+      "openai-codex": null,
+      "github-copilot": "claude-fable-5"
+    }
+  },
+  "opus": {
+    "opus-5.5": {
+      "openai-codex": null,
+      "github-copilot": "claude-opus-5.5"
+    }
+  },
+  "sonnet": {
+    "sonnet-4.6": {
+      "openai-codex": null,
+      "github-copilot": "claude-sonnet-4.6"
+    }
+  },
+  "haiku": {
+    "haiku-4.5": {
+      "openai-codex": null,
+      "github-copilot": "claude-haiku-4.5"
+    }
+  },
+  "sol": {
+    "gpt-6.1-sol": {
+      "openai-codex": "gpt-6.1-sol",
+      "github-copilot": null
+    },
+    "gpt-6-sol": {
+      "openai-codex": "gpt-6-sol",
+      "github-copilot": null
+    }
+  },
+  "terra": {
+    "gpt-6.1-sol": {
+      "openai-codex": "gpt-6.1-sol",
+      "github-copilot": null
+    },
+    "gpt-6-sol": {
+      "openai-codex": "gpt-6-sol",
+      "github-copilot": null
+    }
+  },
+  "astra": {
+    "gpt-6-astra": {
+      "openai-codex": "gpt-6-astra",
+      "github-copilot": null
+    }
+  },
+  "luna": {
+    "gpt-6-luna": {
+      "openai-codex": "gpt-6-luna",
+      "github-copilot": null
+    }
+  },
+  "kimi": {
+    "kimi-k3": {
+      "openai-codex": null,
+      "github-copilot": null
+    }
+  },
+  "grok": {
+    "grok-4.7": {
+      "openai-codex": null,
+      "github-copilot": null
+    }
+  },
+  "deepseek": {
+    "deepseek-v4.1-flash": {
+      "openai-codex": null,
+      "github-copilot": null
+    },
+    "deepseek-v4-pro": {
+      "openai-codex": null,
+      "github-copilot": null
+    }
+  },
+  "glm": {
+    "glm-5.3": {
+      "openai-codex": null,
+      "github-copilot": null
+    }
+  },
+  "jev": {
+    "jev-router": {
+      "openai-codex": null,
+      "github-copilot": null
+    }
+  }
+}

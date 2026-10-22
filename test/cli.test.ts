@@ -1,0 +1,1174 @@
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import {
+  buildCliTurnConfig,
+  cliEnvFilePaths,
+  compareSemverVersions,
+  detectPackageManagerFromContext,
+  expandHomeDir,
+  formatEnvEntries,
+  globalUpgradeCommand,
+  isDirectCliInvocation,
+  loadCliEnvFiles,
+  parseResumeHistoryMessages,
+  resumeCommand,
+  runEnvCommand,
+  shouldUseTui,
+} from "../src/cli.js";
+import {
+  DEFAULT_CLI_MODEL,
+  describeModelResolution,
+  resolveCliMemoryModel,
+  resolveCliModel,
+  resolveModelName,
+} from "../src/model-resolution/resolver.js";
+import { BUILT_IN_ROUTING_TABLE } from "../src/model-routing/table.js";
+import { canonicalizeModelName } from "../src/model-resolution/catalog.js";
+import { buildProjectCliTurnConfig } from "../src/cli/run.js";
+import {
+  activeFileAutocompleteToken,
+  activeSkillAutocompleteToken,
+  formatQuestionOptionDescription,
+  formatSkillAutocompleteDescription,
+  historyDisplayBlocks,
+  limitHistoryDisplayMessages,
+  moveQuestionHighlight,
+  moveSkillAutocompleteSelection,
+  NO_HIGHLIGHT,
+  questionPickerAnswer,
+  replaceFileAutocompleteToken,
+  skillAutocompleteMatches,
+  startupHeaderLines,
+} from "../src/tui/app.js";
+import { createAssistantMessage } from "./helpers/messages.js";
+import { testIfDocker } from "./helpers/docker-only.js";
+
+const MODEL_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "OPENROUTER_API_KEY",
+  "OPENAI_API_KEY",
+] as const;
+
+const originalEnv = new Map<string, string | undefined>();
+const EMPTY_DOTENV_KEYS = new Set<string>();
+let tempRoot: string | undefined;
+
+for (const key of MODEL_ENV_KEYS) {
+  originalEnv.set(key, process.env[key]);
+}
+
+afterEach(() => {
+  for (const key of MODEL_ENV_KEYS) {
+    const value = originalEnv.get(key);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
+
+describe("CLI dispatcher ownership", () => {
+  test("runs directly from cli source or dist but not from cli-entry or a compiled binary", () => {
+    expect(isDirectCliInvocation("file:///repo/src/cli.ts", "/repo/src/cli.ts")).toBe(true);
+    expect(isDirectCliInvocation("file:///repo/dist/src/cli.js", "/repo/dist/src/cli.js")).toBe(
+      true,
+    );
+    expect(isDirectCliInvocation("file:///repo/src/cli.ts", "/repo/src/cli-entry.ts")).toBe(false);
+    expect(isDirectCliInvocation("file:///opt/relay-pi/relay-pi", "/opt/relay-pi/relay-pi")).toBe(
+      false,
+    );
+    expect(isDirectCliInvocation("file:///repo/src/cli.ts", "/repo/test/cli.test.ts")).toBe(false);
+  });
+});
+
+afterEach(async () => {
+  if (tempRoot) {
+    await rm(tempRoot, { recursive: true, force: true });
+    tempRoot = undefined;
+  }
+});
+
+function clearModelEnv(): void {
+  for (const key of MODEL_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+describe("CLI model inference", () => {
+  testIfDocker(
+    "project replacement controls boot default and explicit virtual validation",
+    async () => {
+      tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-routing-"));
+      const table = structuredClone(BUILT_IN_ROUTING_TABLE);
+      table.defaultTier = "custom";
+      table.tiers = { custom: table.tiers.balanced! };
+      await mkdir(join(tempRoot, ".relay-pi"));
+      await writeFile(join(tempRoot, ".relay-pi", "models.json"), JSON.stringify(table));
+
+      const bare = await buildProjectCliTurnConfig(
+        { workDir: tempRoot, memoryModelName: "openrouter:anthropic/claude-haiku-4.5" },
+        EMPTY_DOTENV_KEYS,
+      );
+      expect(bare.modelResolution).toEqual({
+        modelName: "custom",
+        source: "default",
+        routed: true,
+      });
+      expect(describeModelResolution(bare.modelResolution)).toBe(
+        "custom (routed) — routing-table default",
+      );
+      const explicit = await buildProjectCliTurnConfig(
+        {
+          workDir: tempRoot,
+          modelName: "custom",
+          memoryModelName: "openrouter:anthropic/claude-haiku-4.5",
+        },
+        EMPTY_DOTENV_KEYS,
+      );
+      expect(explicit.modelResolution).toEqual({
+        modelName: "custom",
+        source: "explicit",
+        routed: true,
+      });
+      await expect(
+        buildProjectCliTurnConfig(
+          {
+            workDir: tempRoot,
+            modelName: "frontier",
+            memoryModelName: "openrouter:anthropic/claude-haiku-4.5",
+          },
+          EMPTY_DOTENV_KEYS,
+        ),
+      ).rejects.toThrow('Unknown virtual model tier "frontier" in the active routing table.');
+    },
+  );
+
+  test("bare boot selects the virtual default before concrete fallback or env inference", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    const resolution = resolveCliModel(undefined, EMPTY_DOTENV_KEYS);
+
+    expect(BUILT_IN_ROUTING_TABLE.defaultTier).toBe("frontier");
+    expect(DEFAULT_CLI_MODEL).not.toBe(BUILT_IN_ROUTING_TABLE.defaultTier);
+    expect(resolution).toEqual({ modelName: "frontier", source: "default", routed: true });
+    expect(describeModelResolution(resolution)).toBe("frontier (routed) — routing-table default");
+    expect(() => resolveModelName(resolution.modelName)).toThrow("Unknown model shorthand");
+  });
+
+  test("explicit virtual names bypass canonicalization while concrete names stay concrete", () => {
+    expect(resolveCliModel("frontier", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "frontier",
+      source: "explicit",
+      routed: true,
+    });
+    expect(resolveCliModel("gpt-6-sol", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "gpt-6-sol",
+      source: "explicit",
+    });
+  });
+
+  test("provider-pinned input remains a concrete routing bypass", () => {
+    const { config, modelResolution } = buildCliTurnConfig(
+      { modelName: "openrouter:anthropic/claude-opus-4.8", workDir: "/repo" },
+      EMPTY_DOTENV_KEYS,
+    );
+
+    expect(config.model).toBe("openrouter:anthropic/claude-opus-4.8");
+    expect(modelResolution.routed).toBeUndefined();
+  });
+  test("canonicalizes the model-router concrete shorthands", () => {
+    expect(canonicalizeModelName("moonshotai/kimi-k3")).toBe("kimi-k3");
+    expect(canonicalizeModelName("openai/gpt-6-sol")).toBe("gpt-6-sol");
+    expect(canonicalizeModelName("openai/gpt-6-sol")).toBe("gpt-6-sol");
+  });
+
+  test("resolves every model-router concrete model through OpenRouter", () => {
+    const modelIds = {
+      "kimi-k3": "moonshotai/kimi-k3",
+      "gpt-6-sol": "openai/gpt-6-sol",
+    } as const;
+
+    for (const [shorthand, modelId] of Object.entries(modelIds)) {
+      const model = resolveModelName(`openrouter:${shorthand}`);
+      expect(model.provider).toBe("openrouter");
+      expect(model.id).toBe(modelId);
+    }
+  });
+
+  test("resolves every advisor target through OpenRouter", () => {
+    expect(resolveModelName("openrouter:gpt-6-astra").id).toBe("openai/gpt-6-astra");
+    expect(resolveModelName("openrouter:fable-5.1").id).toBe("anthropic/claude-fable-5.1");
+    expect(resolveModelName("openrouter:gpt-6-sol").id).toBe("openai/gpt-6-sol");
+  });
+
+  // Capabilities and ceilings are ours to pin: the router picks a model by
+  // them, and a synthesized pass-through advertises a conservative default
+  // that would silently change routing. Prices are NOT ours — they come from
+  // the model catalog, and re-stating a vendor's number here would rot the
+  // same way the hand-written table did. What must hold is only that a real
+  // price survived resolution: a pass-through zeroes cost, so accounting
+  // would lie rather than fail.
+  test("preserves model-router capabilities and token ceilings on OpenRouter", () => {
+    const expectations = {
+      "kimi-k3": { contextWindow: 1_048_576, maxTokens: 131_072 },
+      "gpt-6-sol": { contextWindow: 1_050_000, maxTokens: 128_000 },
+    } as const;
+
+    for (const [shorthand, expected] of Object.entries(expectations)) {
+      const model = resolveModelName(`openrouter:${shorthand}`);
+      expect(model.input).toEqual(["text", "image"]);
+      expect(model.reasoning).toBe(true);
+      expect(model.contextWindow).toBe(expected.contextWindow);
+      expect(model.maxTokens).toBe(expected.maxTokens);
+      expect(model.cost.input, `${shorthand} resolved to a free model`).toBeGreaterThan(0);
+    }
+
+    for (const pin of [
+      "openrouter:anthropic/claude-fable-5.1",
+      "openrouter:anthropic/claude-sonnet-4.6",
+      "openrouter:openai/gpt-6-luna",
+    ]) {
+      expect(resolveModelName(pin).cost.input, `${pin} resolved to a free model`).toBeGreaterThan(
+        0,
+      );
+    }
+  });
+
+  test("keeps frontier as chat default when OpenRouter is the only router configured", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveCliModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "frontier",
+      source: "default",
+      routed: true,
+    });
+    expect(resolveCliMemoryModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "luna",
+      source: "inferred",
+      envVar: "OPENROUTER_API_KEY",
+      fromDotenv: false,
+    });
+  });
+
+  test("does not infer from direct-provider keys now that only routers are supported", () => {
+    // ANTHROPIC_API_KEY / OPENAI_API_KEY are no longer router credentials, so
+    // they never trigger inference: resolution falls through to the built-in
+    // defaults just as if no key were set.
+    clearModelEnv();
+    process.env.ANTHROPIC_API_KEY = "test-anthropic";
+    process.env.OPENAI_API_KEY = "test-openai";
+
+    expect(resolveCliModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "frontier",
+      source: "default",
+      routed: true,
+    });
+    expect(resolveCliMemoryModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "luna",
+      source: "default",
+    });
+  });
+
+  test("uses frontier with OpenRouter credentials while memory resolves concretely", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveCliModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "frontier",
+      source: "default",
+      routed: true,
+    });
+    expect(resolveCliMemoryModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "luna",
+      source: "inferred",
+      envVar: "OPENROUTER_API_KEY",
+      fromDotenv: false,
+    });
+  });
+
+  test("falls back to built-in model defaults when no supported provider credentials exist", () => {
+    clearModelEnv();
+
+    expect(resolveCliModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "frontier",
+      source: "default",
+      routed: true,
+    });
+    expect(resolveCliMemoryModel(undefined, EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "luna",
+      source: "default",
+    });
+  });
+
+  test("--provider shorthand pins the chat and memory models for that provider", async () => {
+    const { resolveProviderShorthand, pinnedDefaultModel, pinnedMemoryModel } =
+      await import("../src/model-resolution/catalog.js");
+
+    expect(resolveProviderShorthand("openrouter")).toBe("openrouter");
+    expect(resolveProviderShorthand("relay-pi")).toBeUndefined();
+    expect(resolveProviderShorthand("vercel")).toBeUndefined();
+    expect(resolveProviderShorthand("ai-gateway")).toBeUndefined();
+    // The direct providers were removed; their old shorthands no longer resolve.
+    expect(resolveProviderShorthand("claude")).toBeUndefined();
+    expect(resolveProviderShorthand("openai")).toBeUndefined();
+    expect(resolveProviderShorthand("bogus")).toBeUndefined();
+
+    expect(pinnedDefaultModel("openrouter")).toBe("openrouter:opus");
+    expect(pinnedMemoryModel("openrouter")).toBe("openrouter:luna");
+  });
+
+  test("keeps an explicitly provided model", () => {
+    clearModelEnv();
+
+    expect(resolveCliModel("openai:gpt-6-sol", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "openai:gpt-6-sol",
+      source: "explicit",
+    });
+  });
+
+  test("keeps explicit versions and preserves family selections", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+    process.env.ANTHROPIC_API_KEY = "test-anthropic";
+
+    expect(resolveCliModel("opus-5.5", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "opus-5.5",
+      source: "explicit",
+    });
+    expect(resolveCliModel("sol", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "sol",
+      source: "explicit",
+    });
+  });
+
+  test("resolves model shorthand through the configured provider", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+    process.env.ANTHROPIC_API_KEY = "test-anthropic";
+
+    expect(resolveModelName("opus-5.5").id).toBe("anthropic/claude-opus-5.5");
+    expect(resolveModelName("sol").id).toBe("openai/gpt-6.1-sol");
+  });
+
+  test("clamps deepseek-v4-pro output tokens to the backend limit", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    // pi-ai's catalog advertises 384000, but the backend it routes to rejects
+    // max_tokens above 262144.
+    expect(resolveModelName("deepseek-v4-pro").maxTokens).toBe(262144);
+  });
+
+  test("leaves output tokens untouched for models within the backend limit", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    // Haiku's catalog maxTokens (64000) is already under any backend cap,
+    // so resolution must not alter it.
+    expect(resolveModelName("haiku-4.5").maxTokens).toBe(64000);
+  });
+
+  test("resolves the glm-5.3 shorthand through OpenRouter", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveModelName("glm-5.3").id).toBe("z-ai/glm-5.3");
+    expect(resolveModelName("openrouter:z-ai/glm-5.3").id).toBe("z-ai/glm-5.3");
+  });
+
+  test("forwards a provider-pinned id that is absent from the catalog without throwing", () => {
+    clearModelEnv();
+    process.env.ANTHROPIC_API_KEY = "test-anthropic";
+
+    // pi-ai returns undefined for catalog-absent ids; resolution must pass the
+    // model through (the id is sent to the provider at request time) rather than
+    // dereference a missing model while clamping output tokens.
+    expect(() => resolveModelName("anthropic:claude-sonnet-5-1")).not.toThrow();
+  });
+
+  test("resolveProviderApiKey reads the OpenRouter credential", async () => {
+    const { resolveProviderApiKey } = await import("../src/model-resolution/provider-catalog.js");
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+    expect(resolveProviderApiKey("openrouter")).toBe("test-openrouter");
+  });
+
+  test("rejects model shorthand when no supported provider credentials are configured", () => {
+    clearModelEnv();
+
+    expect(() => resolveModelName("opus-5.5")).toThrow(
+      "Model shorthand requires credentials for a supported provider: opus-5.5",
+    );
+    expect(() => resolveModelName("sol")).toThrow(
+      "Model shorthand requires credentials for a supported provider: sol",
+    );
+  });
+
+  test("provider:modelId syntax pins the router provider", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveModelName("openrouter:anthropic/claude-opus-5.5").id).toBe(
+      "anthropic/claude-opus-5.5",
+    );
+  });
+
+  test("forwards an explicit non-router pin straight through to pi-ai", () => {
+    // The direct anthropic/openai providers were removed, but an explicit pin
+    // for them is just an unknown provider here: resolution applies no catalog
+    // canonicalization and hands the provider:modelId to pi-ai's getModel
+    // verbatim. pi-ai resolves it when it ships that native id, so a laptop
+    // caller with the right credential can still reach it — an incidental
+    // passthrough, not an advertised path.
+    clearModelEnv();
+    process.env.ANTHROPIC_API_KEY = "test-anthropic";
+
+    expect(resolveModelName("anthropic:claude-haiku-4-5").id).toBe("claude-haiku-4-5");
+    expect(resolveModelName("openai:gpt-5.2").id).toBe("gpt-5.2");
+  });
+
+  test("canonicalizes dashed model id aliases inside provider:modelId form", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    // The catalog spells ids with dots. Users frequently type dashes; the
+    // alias table bridges the gap.
+    expect(resolveModelName("openrouter:anthropic/claude-haiku-4-5").id).toBe(
+      "anthropic/claude-haiku-4.5",
+    );
+    expect(resolveModelName("openrouter:anthropic/claude-sonnet-4-6").id).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
+  });
+
+  test("passes provider:modelId through unchanged when no alias matches", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveModelName("openrouter:anthropic/claude-opus-5.5").id).toBe(
+      "anthropic/claude-opus-5.5",
+    );
+  });
+
+  test("keeps explicit memory versions and preserves family selections", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    expect(resolveCliMemoryModel("haiku-4.5", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "haiku-4.5",
+      source: "explicit",
+    });
+    expect(resolveCliMemoryModel("haiku", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "haiku",
+      source: "explicit",
+    });
+  });
+
+  test("keeps an explicitly provided memory model", () => {
+    expect(resolveCliMemoryModel("anthropic:claude-3-5-haiku-latest", EMPTY_DOTENV_KEYS)).toEqual({
+      modelName: "anthropic:claude-3-5-haiku-latest",
+      source: "explicit",
+    });
+  });
+
+  test("builds CLI config from explicit shorthand model flags", () => {
+    clearModelEnv();
+
+    const { config, modelResolution, memoryModelResolution } = buildCliTurnConfig(
+      {
+        modelName: "opus-5.5",
+        memoryModelName: "haiku-4.5",
+        workDir: "/repo",
+      },
+      EMPTY_DOTENV_KEYS,
+    );
+
+    expect(config).toMatchObject({
+      model: "opus-5.5",
+      memoryModel: "haiku-4.5",
+      cwd: "/repo",
+    });
+    expect(modelResolution).toEqual({
+      modelName: "opus-5.5",
+      source: "explicit",
+    });
+    expect(memoryModelResolution).toEqual({
+      modelName: "haiku-4.5",
+      source: "explicit",
+    });
+  });
+
+  test("builds CLI config with frontier routing and an inferred concrete memory default", () => {
+    clearModelEnv();
+    process.env.OPENROUTER_API_KEY = "test-openrouter";
+
+    const { config, modelResolution, memoryModelResolution } = buildCliTurnConfig(
+      {
+        incognito: true,
+        workDir: "/repo",
+        systemInstructions: "Prefer concise answers.",
+        systemPromptFiles: [],
+      },
+      EMPTY_DOTENV_KEYS,
+    );
+
+    expect(config).toEqual({
+      model: "frontier",
+      memoryModel: "luna",
+      memoryDbPath: false,
+      memoryStores: false,
+      cwd: "/repo",
+      systemInstructions: "Prefer concise answers.",
+      systemPromptFiles: [],
+    });
+    expect(modelResolution).toEqual({
+      modelName: "frontier",
+      source: "default",
+      routed: true,
+    });
+    expect(memoryModelResolution).toEqual({
+      modelName: "luna",
+      source: "inferred",
+      envVar: "OPENROUTER_API_KEY",
+      fromDotenv: false,
+    });
+  });
+});
+
+describe("expandHomeDir", () => {
+  // Covers the `--workdir ~/xyz` path in both run.ts and rpc.ts so a quoted
+  // tilde (which the shell does not expand) still resolves to the user's
+  // home directory.
+  test("expands a leading ~ to the user's home directory", () => {
+    const home = homedir();
+    expect(expandHomeDir("~")).toBe(home);
+    expect(expandHomeDir("~/code/foo")).toBe(join(home, "code/foo"));
+  });
+
+  test("leaves non-tilde paths unchanged so relative workdirs still work", () => {
+    expect(expandHomeDir("/abs/path")).toBe("/abs/path");
+    expect(expandHomeDir("relative/path")).toBe("relative/path");
+    expect(expandHomeDir("")).toBe("");
+    // `~user` is intentionally not expanded — Node has no portable helper for
+    // resolving another user's home, and shells already expand the supported
+    // forms before relay-pi sees them.
+    expect(expandHomeDir("~other/foo")).toBe("~other/foo");
+  });
+});
+
+describe("CLI env files", () => {
+  testIfDocker("loads workdir .env before the shared env file", async () => {
+    clearModelEnv();
+    tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+    const workDir = join(tempRoot, "project");
+    const sharedEnv = join(tempRoot, "shared.env");
+    await mkdir(workDir);
+    await writeFile(join(workDir, ".env"), "OPENROUTER_API_KEY=from-workdir\n");
+    await writeFile(sharedEnv, "OPENROUTER_API_KEY=from-shared\n");
+
+    const dotenvKeys = loadCliEnvFiles(workDir, sharedEnv);
+
+    expect(process.env.OPENROUTER_API_KEY).toBe("from-workdir");
+    expect(dotenvKeys).toEqual(new Set(["OPENROUTER_API_KEY"]));
+  });
+
+  test("resolves relative custom env files from the workdir", () => {
+    expect(cliEnvFilePaths("/repo", ".relay-pi.env")).toEqual([
+      "/repo/.env",
+      "/repo/.relay-pi.env",
+    ]);
+  });
+
+  testIfDocker("ignores a shared env file outside Relay Pi home", async () => {
+    const root = await mkdtemp(join(tmpdir(), "relay-pi-env-"));
+    const workDir = join(root, "project");
+    const home = join(root, "home");
+    await mkdir(workDir, { recursive: true });
+    await mkdir(join(home, ".relay-pi-unsupported"), { recursive: true });
+    await writeFile(
+      join(home, ".relay-pi-unsupported", ".env"),
+      "RELAY_PI_ENV_PROBE=unsupported\\n",
+    );
+    await mkdir(join(home, ".relay-pi"), { recursive: true });
+
+    const readProbe = async (): Promise<string> => {
+      const proc = Bun.spawn(
+        [
+          "bun",
+          "-e",
+          'const { loadCliEnvFiles } = await import("./src/cli/shared.ts"); loadCliEnvFiles(process.argv[1]); console.log(process.env.RELAY_PI_ENV_PROBE ?? "")',
+          workDir,
+        ],
+        { cwd: process.cwd(), env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(await proc.exited).toBe(0);
+      return (await new Response(proc.stdout).text()).trim();
+    };
+
+    try {
+      expect(await readProbe()).toBe("");
+      await writeFile(
+        join(home, ".relay-pi", ".env"),
+        `RELAY_PI_ENV_PROBE=from-current
+`,
+      );
+      expect(await readProbe()).toBe("from-current");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  testIfDocker("formats env entries with shell-safe quoting", () => {
+    expect(
+      formatEnvEntries(
+        new Map([
+          ["RELAY_PI_API_KEY", "relay_pi_gt_test"],
+          ["OPENROUTER_API_KEY", "value with spaces"],
+        ]),
+      ),
+    ).toBe('RELAY_PI_API_KEY=relay_pi_gt_test\nOPENROUTER_API_KEY="value with spaces"\n');
+  });
+
+  testIfDocker("env import without a path imports cwd .env into a custom env file", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+    const workDir = join(tempRoot, "project");
+    const targetEnv = join(tempRoot, "relay-pi.env");
+    await mkdir(workDir);
+    await writeFile(join(workDir, ".env"), "OPENROUTER_API_KEY=openrouter_test\n");
+
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runEnvCommand(["--env-file", targetEnv, "--import"], { cwd: workDir });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(await readFile(targetEnv, "utf8")).toBe("OPENROUTER_API_KEY=openrouter_test\n");
+  });
+
+  testIfDocker("env import only copies recognized provider keys from the source", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+    const workDir = join(tempRoot, "project");
+    const targetEnv = join(tempRoot, "relay-pi.env");
+    await mkdir(workDir);
+    await writeFile(
+      join(workDir, ".env"),
+      [
+        "RELAY_PI_API_KEY=relay_pi_gt_test",
+        "OPENROUTER_API_KEY=openrouter_test",
+        "DATABASE_URL=postgres://example",
+        "STRIPE_SECRET_KEY=sk_test_unrelated",
+        "",
+      ].join("\n"),
+    );
+
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runEnvCommand(["--env-file", targetEnv, "--import"], { cwd: workDir });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(await readFile(targetEnv, "utf8")).toBe("OPENROUTER_API_KEY=openrouter_test\n");
+  });
+
+  testIfDocker(
+    "env import with a path merges that env file into an existing custom env file",
+    async () => {
+      tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+      const workDir = join(tempRoot, "project");
+      const targetEnv = join(tempRoot, "relay-pi.env");
+      await mkdir(workDir);
+      await writeFile(join(workDir, ".env"), "OPENROUTER_API_KEY=openrouter_new\n");
+      // A pre-existing, unrecognized key in the target must survive the merge.
+      await writeFile(targetEnv, "STRIPE_SECRET_KEY=sk_existing\n");
+
+      const stderr = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await runEnvCommand(["--env-file", targetEnv, "--import", join(workDir, ".env")]);
+      } finally {
+        stderr.mockRestore();
+      }
+
+      expect(await readFile(targetEnv, "utf8")).toBe(
+        "STRIPE_SECRET_KEY=sk_existing\nOPENROUTER_API_KEY=openrouter_new\n",
+      );
+    },
+  );
+
+  testIfDocker("env keys writes prompted provider API keys to a custom env file", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+    const workDir = join(tempRoot, "project");
+    const targetEnv = join(tempRoot, "relay-pi.env");
+    await mkdir(workDir);
+
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runEnvCommand(["--env-file", targetEnv, "--keys"], {
+        cwd: workDir,
+        interactive: true,
+        promptForApiKeys: async () => new Map([["OPENROUTER_API_KEY", "openrouter_test"]]),
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+
+    expect(await readFile(targetEnv, "utf8")).toBe("OPENROUTER_API_KEY=openrouter_test\n");
+  });
+
+  testIfDocker("env without an action prints help and does not write an env file", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "relay-pi-cli-env-"));
+    const workDir = join(tempRoot, "project");
+    const targetEnv = join(tempRoot, "relay-pi.env");
+    await mkdir(workDir);
+    await writeFile(join(workDir, ".env"), "RELAY_PI_API_KEY=relay_pi_gt_test\n");
+
+    let printedHelp = false;
+    await runEnvCommand(["--env-file", targetEnv], {
+      cwd: workDir,
+      interactive: true,
+      printHelp: () => {
+        printedHelp = true;
+      },
+    });
+
+    await expect(readFile(targetEnv, "utf8")).rejects.toThrow();
+    expect(printedHelp).toBe(true);
+  });
+});
+
+describe("CLI version checks", () => {
+  test("compares semantic versions", () => {
+    expect(compareSemverVersions("0.1.3", "0.1.2")).toBe(1);
+    expect(compareSemverVersions("0.2.0", "0.10.0")).toBe(-1);
+    expect(compareSemverVersions("1.0.0", "1.0.0")).toBe(0);
+    expect(compareSemverVersions("1.0.0", "1.0.0-beta.1")).toBe(1);
+    expect(compareSemverVersions("1.0.0-beta.1", "1.0.0")).toBe(-1);
+  });
+});
+
+describe("CLI resume command", () => {
+  test("uses the relay-pi executable name", () => {
+    expect(
+      resumeCommand("session_123", {
+        workDir: "/repo",
+      }),
+    ).toMatch(/^relay-pi --resume /);
+  });
+
+  test("preserves incognito mode", () => {
+    expect(
+      resumeCommand("session_123", {
+        modelName: "opus-5.5",
+        memoryModelName: "haiku-4.5",
+        workDir: "/repo",
+        incognito: true,
+      }),
+    ).toContain("--incognito");
+  });
+
+  test("preserves --db when an explicit memory db path was set", () => {
+    expect(
+      resumeCommand("session_123", {
+        workDir: "/repo",
+        dbPath: "/tmp/custom.db",
+      }),
+    ).toContain("--db /tmp/custom.db");
+  });
+});
+
+describe("CLI memory db resolution", () => {
+  test("defaults memoryDbPath to ~/.relay-pi/memory.db when neither --db nor --incognito is set", () => {
+    clearModelEnv();
+    process.env.OPENAI_API_KEY = "test-openai";
+    const { config } = buildCliTurnConfig({ workDir: "/repo" }, EMPTY_DOTENV_KEYS);
+    expect(typeof config.memoryDbPath).toBe("string");
+    expect(config.memoryDbPath as string).toMatch(/\.relay-pi\/memory\.db$/);
+  });
+
+  test("forwards --db verbatim", () => {
+    clearModelEnv();
+    process.env.OPENAI_API_KEY = "test-openai";
+    const { config } = buildCliTurnConfig(
+      { workDir: "/repo", dbPath: "/tmp/custom.db" },
+      EMPTY_DOTENV_KEYS,
+    );
+    expect(config.memoryDbPath).toBe("/tmp/custom.db");
+  });
+
+  test("--incognito wins over --db", () => {
+    clearModelEnv();
+    process.env.OPENAI_API_KEY = "test-openai";
+    const { config } = buildCliTurnConfig(
+      { workDir: "/repo", dbPath: "/tmp/custom.db", incognito: true },
+      EMPTY_DOTENV_KEYS,
+    );
+    expect(config.memoryDbPath).toBe(false);
+    expect(config.memoryStores).toBe(false);
+  });
+});
+
+describe("CLI render mode", () => {
+  test("uses TUI only for interactive sessions without a prompt", () => {
+    expect(shouldUseTui({ interactive: true })).toBe(true);
+    expect(shouldUseTui({ interactive: true, prompt: "hi" })).toBe(false);
+    expect(shouldUseTui({ interactive: false, prompt: "hi" })).toBe(false);
+  });
+});
+
+describe("CLI resume history display", () => {
+  test("parses non-negative resume history message limits", () => {
+    expect(parseResumeHistoryMessages("0")).toBe(0);
+    expect(parseResumeHistoryMessages("5")).toBe(5);
+    expect(() => parseResumeHistoryMessages("-1")).toThrow(
+      "--resume-history-messages must be a non-negative integer",
+    );
+    expect(() => parseResumeHistoryMessages("all")).toThrow(
+      "--resume-history-messages must be a non-negative integer",
+    );
+  });
+
+  test("limits resumed history to the newest user-turn exchanges", () => {
+    const limited = limitHistoryDisplayMessages(
+      [
+        { kind: "user", content: "you:\noldest question" },
+        { kind: "agent", content: "oldest answer" },
+        { kind: "user", content: "you:\nmiddle question" },
+        { kind: "agent", content: "middle answer" },
+        { kind: "user", content: "you:\nnew question" },
+        { kind: "tool", content: "[tool read] ✓" },
+        { kind: "agent", content: "line one\nline two" },
+      ],
+      2,
+    );
+
+    expect(limited.omittedBlocks).toBe(2);
+    expect(limited.blocks.map((block) => block.content)).toEqual([
+      "you:\nmiddle question",
+      "middle answer",
+      "you:\nnew question",
+      "[tool read] ✓",
+      "line one\nline two",
+    ]);
+  });
+
+  test("drops orphan blocks before the first kept user turn", () => {
+    const limited = limitHistoryDisplayMessages(
+      [
+        { kind: "agent", content: "orphan reply" },
+        { kind: "tool", content: "orphan tool" },
+        { kind: "user", content: "you:\nfirst real prompt" },
+        { kind: "agent", content: "answer" },
+      ],
+      5,
+    );
+
+    expect(limited.omittedBlocks).toBe(2);
+    expect(limited.blocks.map((block) => block.kind)).toEqual(["user", "agent"]);
+  });
+
+  test("zero resume history messages disables replay", () => {
+    const limited = limitHistoryDisplayMessages([{ kind: "agent", content: "one\ntwo" }], 0);
+
+    expect(limited.blocks).toEqual([]);
+    expect(limited.omittedBlocks).toBe(1);
+  });
+
+  test("formats resumed messages before limiting", () => {
+    const history: AgentMessage[] = [
+      { role: "user", content: "hello", timestamp: 1 },
+      createAssistantMessage({ text: "hi" }),
+    ];
+    const blocks = historyDisplayBlocks(history);
+
+    expect(blocks).toEqual([
+      { kind: "user", content: "you:\nhello" },
+      { kind: "agent", content: "hi" },
+    ]);
+  });
+
+  test("pairs resumed tool calls with their results", () => {
+    const history: AgentMessage[] = [
+      createAssistantMessage({
+        extraContent: [
+          {
+            type: "toolCall",
+            id: "tool-1",
+            name: "read_file",
+            arguments: { path: "package.json" },
+          },
+        ],
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read_file",
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+
+    expect(historyDisplayBlocks(history)).toEqual([
+      {
+        kind: "tool",
+        content: '[tool read_file] ✓\n{"path":"package.json"}\n[result]\nok',
+      },
+    ]);
+  });
+
+  test("prints startup header before any resumed history", () => {
+    const header = startupHeaderLines({
+      packageVersion: "0.1.12",
+      workDir: "/repo",
+      sessionId: "session_123",
+      modelName: "opus-5.5",
+      modelSource: "default",
+      memoryModelName: "haiku-4.5",
+    });
+    const history = limitHistoryDisplayMessages(
+      [
+        { kind: "user", content: "you:\nprevious question" },
+        { kind: "agent", content: "previous answer" },
+      ],
+      5,
+    );
+
+    expect([...header, ...history.blocks.map((block) => block.content)]).toEqual([
+      "[relay-pi] v0.1.12",
+      "[cwd] /repo",
+      "[session] session_123",
+      "[model] opus-5.5 — default",
+      "[memory model] haiku-4.5",
+      "you:\nprevious question",
+      "previous answer",
+    ]);
+  });
+});
+
+describe("TUI skill autocomplete helpers", () => {
+  const skills = [
+    { name: "review", description: "Review changed code.", path: "/skills/review" },
+    { name: "release", description: "Bump version and tag.", path: "/skills/release" },
+    { name: "opentui", description: "Build terminal UIs.", path: "/skills/opentui" },
+    { name: "react-best-practices", path: "/skills/react-best-practices" },
+  ];
+
+  test("detects slash tokens at the cursor anywhere in the prompt", () => {
+    expect(activeSkillAutocompleteToken("/", 1)).toEqual({ start: 0, end: 1, query: "" });
+    expect(activeSkillAutocompleteToken("please /rev", "please /rev".length)).toEqual({
+      start: 7,
+      end: 11,
+      query: "rev",
+    });
+    expect(activeSkillAutocompleteToken("please /review now", "please /rev".length)).toEqual({
+      start: 7,
+      end: 14,
+      query: "rev",
+    });
+  });
+
+  test("ignores non-slash text and invalid slash tokens", () => {
+    expect(activeSkillAutocompleteToken("please review", "please review".length)).toBeUndefined();
+    expect(
+      activeSkillAutocompleteToken("please /bad:name", "please /bad:name".length),
+    ).toBeUndefined();
+  });
+
+  test("filters skill names by case-insensitive prefix and limit", () => {
+    expect(skillAutocompleteMatches(skills, "re").map((skill) => skill.name)).toEqual([
+      "react-best-practices",
+      "release",
+      "review",
+    ]);
+    expect(skillAutocompleteMatches(skills, "RE", 2).map((skill) => skill.name)).toEqual([
+      "react-best-practices",
+      "release",
+    ]);
+  });
+
+  test("preserves skill descriptions and paths in filtered matches", () => {
+    expect(skillAutocompleteMatches(skills, "rel", 1)).toEqual([
+      { name: "release", description: "Bump version and tag.", path: "/skills/release" },
+    ]);
+  });
+
+  test("wraps autocomplete descriptions without leading indentation", () => {
+    expect(
+      formatSkillAutocompleteDescription(
+        "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch.",
+      ),
+    ).toBe(
+      "Create new skills, modify and improve existing skills, and measure skill\nperformance. Use when users want to create a skill from scratch.",
+    );
+  });
+
+  test("wraps autocomplete selection through available matches", () => {
+    expect(moveSkillAutocompleteSelection(0, 3, 1)).toBe(1);
+    expect(moveSkillAutocompleteSelection(2, 3, 1)).toBe(0);
+    expect(moveSkillAutocompleteSelection(0, 3, -1)).toBe(2);
+    expect(moveSkillAutocompleteSelection(0, 0, 1)).toBe(0);
+  });
+
+  test("locates the active slash token under the cursor", () => {
+    const text = "please /rev now";
+    const token = activeSkillAutocompleteToken(text, "please /rev".length);
+    if (!token) throw new Error("Expected slash token");
+
+    expect(token).toEqual({ start: 7, end: 11, query: "rev" });
+  });
+});
+
+describe("TUI file autocomplete helpers", () => {
+  test("replaceFileAutocompleteToken inserts a markdown link with `./` prefix", () => {
+    const text = "look at @sr now";
+    const token = activeFileAutocompleteToken(text, "look at @sr".length);
+    if (!token) throw new Error("Expected file token");
+
+    expect(token).toEqual({ start: 8, end: 11, query: "sr" });
+    expect(replaceFileAutocompleteToken(text, token, "src/tui/app.ts")).toEqual({
+      text: "look at [@app.ts](./src/tui/app.ts) now",
+      cursorOffset: "look at [@app.ts](./src/tui/app.ts)".length,
+    });
+  });
+
+  test("replaceFileAutocompleteToken inserts a trailing space when none follows", () => {
+    const text = "diff @";
+    const token = activeFileAutocompleteToken(text, text.length);
+    if (!token) throw new Error("Expected file token");
+
+    const replacement = replaceFileAutocompleteToken(text, token, "README.md");
+    expect(replacement.text).toBe("diff [@README.md](./README.md) ");
+    expect(replacement.cursorOffset).toBe(replacement.text.length);
+  });
+
+  test("replaceFileAutocompleteToken uses the basename in the visible label", () => {
+    const text = "@p";
+    const token = activeFileAutocompleteToken(text, text.length);
+    if (!token) throw new Error("Expected file token");
+
+    expect(
+      replaceFileAutocompleteToken(text, token, "packages/agent-gateway/src/index.ts").text,
+    ).toBe("[@index.ts](./packages/agent-gateway/src/index.ts) ");
+  });
+});
+
+describe("TUI question picker helpers", () => {
+  const singleSelect = {
+    question: "Which environment should I deploy to?",
+    options: [
+      { label: "staging", description: "Deploy to the staging environment first." },
+      { label: "production", description: "Deploy directly to production." },
+    ],
+  };
+  const multiSelect = {
+    question: "Which test suites should run before promotion?",
+    multiSelect: true,
+    options: [{ label: "unit" }, { label: "integration" }, { label: "e2e" }],
+  };
+
+  test("moveQuestionHighlight wraps and lifts NO_HIGHLIGHT onto the first or last row", () => {
+    // From a concrete row, modular wrap.
+    expect(moveQuestionHighlight(0, 2, 1)).toBe(1);
+    expect(moveQuestionHighlight(1, 2, 1)).toBe(0);
+    expect(moveQuestionHighlight(0, 2, -1)).toBe(1);
+    // From NO_HIGHLIGHT, Down lands on row 0; Up lands on the last row. This
+    // is what makes "no highlight by default" behave like a chat-app picker
+    // when the user starts navigating.
+    expect(moveQuestionHighlight(NO_HIGHLIGHT, 4, 1)).toBe(0);
+    expect(moveQuestionHighlight(NO_HIGHLIGHT, 4, -1)).toBe(3);
+    // Empty row count yields NO_HIGHLIGHT (renders as no highlight).
+    expect(moveQuestionHighlight(0, 0, 1)).toBe(NO_HIGHLIGHT);
+  });
+
+  test("builds a single-element answer for single-select questions", () => {
+    expect(questionPickerAnswer(singleSelect, 1, new Set())).toEqual(["production"]);
+  });
+
+  test("returns undefined for single-select with NO_HIGHLIGHT", () => {
+    // Default state when the user has not yet pressed Up/Down. Returning
+    // undefined lets the picker orchestration skip writing an answer the
+    // user hasn't expressed yet.
+    expect(questionPickerAnswer(singleSelect, NO_HIGHLIGHT, new Set())).toBeUndefined();
+  });
+
+  test("emits checked labels in option order for multi-select questions", () => {
+    expect(questionPickerAnswer(multiSelect, 0, new Set([2, 0]))).toEqual(["unit", "e2e"]);
+  });
+
+  test("returns an empty array for a multi-select with nothing checked", () => {
+    expect(questionPickerAnswer(multiSelect, 0, new Set())).toEqual([]);
+  });
+
+  test("returns undefined when the question is missing or has no option at the selection", () => {
+    expect(questionPickerAnswer(undefined, 0, new Set())).toBeUndefined();
+    expect(questionPickerAnswer(singleSelect, 5, new Set())).toBeUndefined();
+  });
+
+  test("wraps full question option descriptions without truncating", () => {
+    expect(
+      formatQuestionOptionDescription(
+        "Deploy to staging first so the team can validate smoke tests before promoting the release to production after the rollout checklist is complete.",
+      ),
+    ).toBe(
+      "Deploy to staging first so the team can validate smoke tests before\npromoting the release to production after the rollout checklist is\ncomplete.",
+    );
+  });
+});
+
+describe("CLI upgrade package manager detection", () => {
+  test("detects an npm global install even when the CLI runs under Bun", () => {
+    expect(
+      detectPackageManagerFromContext({
+        runtimeExecutable: "/Users/david/.bun/bin/bun",
+        cliFilePath:
+          "/Users/david/.nvm/versions/node/v24.14.0/lib/node_modules/@dzhng/relay-pi/dist/src/cli.js",
+        scriptPath: "/Users/david/.nvm/versions/node/v24.14.0/bin/relay-pi",
+      }),
+    ).toBe("npm");
+  });
+
+  test("detects a Bun global install from the package location", () => {
+    expect(
+      detectPackageManagerFromContext({
+        runtimeExecutable: "/Users/david/.bun/bin/bun",
+        cliFilePath:
+          "/Users/david/.bun/install/global/node_modules/@dzhng/relay-pi/dist/src/cli.js",
+        scriptPath: "/Users/david/.bun/bin/relay-pi",
+      }),
+    ).toBe("bun");
+  });
+
+  test("lets package-manager user agents override install path detection", () => {
+    expect(
+      detectPackageManagerFromContext({
+        userAgent: "pnpm/10.0.0 npm/? node/v24.0.0 darwin arm64",
+        cliFilePath:
+          "/Users/david/.nvm/versions/node/v24.14.0/lib/node_modules/@dzhng/relay-pi/dist/src/cli.js",
+      }),
+    ).toBe("pnpm");
+  });
+
+  test("installs an exact version instead of the latest dist-tag", () => {
+    expect(globalUpgradeCommand("npm", "relay-pi", "0.1.22")).toEqual([
+      "npm",
+      "install",
+      "--global",
+      "relay-pi@0.1.22",
+    ]);
+    expect(globalUpgradeCommand("bun", "relay-pi", "v0.1.22")).toEqual([
+      "bun",
+      "add",
+      "--global",
+      "relay-pi@0.1.22",
+    ]);
+  });
+});

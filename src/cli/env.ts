@@ -1,0 +1,150 @@
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
+import dotenv from "dotenv";
+import { printEnvHelp } from "./help.js";
+import {
+  defaultRelayPiEnvFilePath,
+  fail,
+  fileExists,
+  mergeEnvEntries,
+  resolveUserPath,
+  SUPPORTED_API_KEYS,
+} from "./shared.js";
+
+export interface EnvCommandIO {
+  cwd?: string;
+  /** Override interactivity detection so tests can drive the paste flow. */
+  interactive?: boolean;
+  /** Inject a stand-in for the readline-backed key prompt. */
+  promptForApiKeys?: () => Promise<Map<string, string>>;
+  /** Inject a stand-in for the help-text printer. */
+  printHelp?: () => void;
+}
+
+/**
+ * Run `relay-pi env`.
+ *
+ * Two modes share a target env file: `--import` copies provider keys from a
+ * source env file (cwd .env by default), and `--keys` prompts the user for
+ * each supported provider key. Without either flag we just print help.
+ */
+export async function runEnvCommand(args: string[], io: EnvCommandIO = {}): Promise<void> {
+  const cwd = io.cwd ?? process.cwd();
+  let envFilePath: string | undefined;
+  let importEnvFilePath: string | undefined;
+  let pasteKeys = false;
+
+  for (let i = 0; i < args.length; i++) {
+    switch (args[i]) {
+      case "--env-file":
+        if (!args[i + 1] || args[i + 1]?.startsWith("-")) fail(`Missing value for ${args[i]}`);
+        envFilePath = args[++i]!;
+        break;
+      case "--import":
+      case "-i":
+        importEnvFilePath = args[i + 1]?.startsWith("-") ? "" : (args[++i] ?? "");
+        break;
+      case "--keys":
+        pasteKeys = true;
+        break;
+      case "--help":
+      case "-h":
+        printEnvHelp();
+        return;
+      default:
+        fail(`Unknown env option: ${args[i]}`);
+    }
+  }
+
+  const targetEnvFile = envFilePath
+    ? resolveUserPath(envFilePath, cwd)
+    : defaultRelayPiEnvFilePath();
+  const sourceEnvFile =
+    importEnvFilePath === undefined
+      ? undefined
+      : importEnvFilePath
+        ? resolveUserPath(importEnvFilePath, cwd)
+        : join(cwd, ".env");
+  const interactive = io.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
+
+  if (sourceEnvFile === undefined && !pasteKeys) {
+    (io.printHelp ?? printEnvHelp)();
+    return;
+  }
+
+  if (sourceEnvFile !== undefined) {
+    if (!(await fileExists(sourceEnvFile))) {
+      fail(`No .env file found at ${sourceEnvFile}`);
+    }
+    const imported = await importEnvFile(sourceEnvFile, targetEnvFile);
+    if (imported.length === 0) {
+      console.error(
+        `No supported provider keys found in ${sourceEnvFile}. Looked for: ${SUPPORTED_API_KEYS.join(", ")}`,
+      );
+    } else {
+      console.error(
+        `Imported ${imported.length} key${imported.length === 1 ? "" : "s"} (${imported.join(", ")}) from ${sourceEnvFile} into ${targetEnvFile}`,
+      );
+    }
+  }
+
+  if (pasteKeys) {
+    if (!interactive) {
+      fail("relay-pi env --keys requires an interactive terminal");
+    }
+    const entries = await (io.promptForApiKeys ?? promptForApiKeys)();
+    if (entries.size === 0) {
+      console.error("No API keys entered.");
+      return;
+    }
+    await mergeEnvEntries(targetEnvFile, entries);
+    console.error(`Saved API keys to ${targetEnvFile}`);
+  }
+}
+
+/**
+ * Pull only the provider keys we recognize out of `source` and merge them
+ * into `target`. Anything else in `source` (app secrets, unrelated config)
+ * is intentionally ignored so we never copy noise into the shared relay-pi env
+ * file. Returns the keys that were actually imported.
+ */
+async function importEnvFile(source: string, target: string): Promise<readonly string[]> {
+  if (resolve(source) === resolve(target)) {
+    console.error(`${target} is already the shared env file.`);
+    return [];
+  }
+  const parsed = dotenv.parse(await readFile(source));
+  const entries = new Map<string, string>();
+  for (const key of SUPPORTED_API_KEYS) {
+    const value = parsed[key];
+    if (typeof value === "string" && value.length > 0) entries.set(key, value);
+  }
+  if (entries.size === 0) return [];
+  await mkdir(dirname(target), { recursive: true });
+  await mergeEnvEntries(target, entries);
+  return [...entries.keys()];
+}
+
+/**
+ * Prompt the user for each supported provider key on stderr; blank input
+ * skips that key. We use stderr so piping `relay-pi env --keys` does not pollute
+ * stdout with prompt text.
+ */
+async function promptForApiKeys(): Promise<Map<string, string>> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  });
+  try {
+    const entries = new Map<string, string>();
+    console.error("Paste API keys for any providers you want to use. Leave blank to skip.");
+    for (const key of SUPPORTED_API_KEYS) {
+      const value = (await rl.question(`${key}: `)).trim();
+      if (value) entries.set(key, value);
+    }
+    return entries;
+  } finally {
+    rl.close();
+  }
+}
