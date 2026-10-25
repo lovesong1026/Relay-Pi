@@ -58,9 +58,8 @@ import type { ShellPartialOutput } from "./shell-state-handle.js";
 const jsonSchemaValidator = new Ajv({ strictSchema: false });
 
 /**
- * Remove pi's kill-timeout input at the execution boundary. The public bash
- * `timeout` field is consumed by the task wrapper as a foreground wait budget;
- * only explicit task_stop, interrupt, or scope closure may abort the command.
+ * 在执行边界移除 pi 的 kill-timeout 输入。公开 bash 的 `timeout` 字段由 task wrapper
+ * 作为前台等待预算消费；只有显式的 task_stop、interrupt 或作用域关闭才能中止命令。
  */
 export function withoutBashKillTimeout(base: BashOperations): BashOperations {
   return {
@@ -70,9 +69,9 @@ export function withoutBashKillTimeout(base: BashOperations): BashOperations {
 
 const questionOptionSchema = Type.Object(
   {
-    label: Type.String({ description: "Answer text shown to the user." }),
+    label: Type.String({ description: "向用户展示的选项文本。" }),
     description: Type.Optional(
-      Type.String({ description: "Optional context explaining this choice." }),
+      Type.String({ description: "解释此选项的可选背景信息。" }),
     ),
   },
   { additionalProperties: false },
@@ -80,17 +79,17 @@ const questionOptionSchema = Type.Object(
 
 const questionSchema = Type.Object(
   {
-    question: Type.String({ description: "Question to ask the user." }),
+    question: Type.String({ description: "要向用户提出的问题。" }),
     header: Type.Optional(
-      Type.String({ description: "Optional section heading for this question." }),
+      Type.String({ description: "此问题的可选分节标题。" }),
     ),
     options: Type.Array(questionOptionSchema, {
       minItems: 1,
       description:
-        "Answer options the user can choose from. Each question must have at least one option so the user has something to select.",
+        "用户可以选择的答案选项。每个问题至少要有一个选项，以便用户有所选择。",
     }),
     multiSelect: Type.Optional(
-      Type.Boolean({ description: "Whether the user may select more than one option." }),
+      Type.Boolean({ description: "用户是否可以选择多个选项。" }),
     ),
   },
   { additionalProperties: false },
@@ -99,7 +98,7 @@ const questionSchema = Type.Object(
 const askUserQuestionSchema = Type.Object(
   {
     questions: Type.Array(questionSchema, {
-      description: "Structured multiple-choice questions that must be answered before continuing.",
+      description: "继续之前必须得到回答的结构化选择题。",
     }),
   },
   { additionalProperties: false },
@@ -116,7 +115,7 @@ const todoStatusSchema = Type.Union(
   ],
   {
     description:
-      "pending = not started; in_progress = actively being worked on (keep at most one); completed = done; failed = could not finish, leave a note in content if useful.",
+      "pending = 尚未开始；in_progress = 正在处理（最多保留一项）；completed = 已完成；failed = 未能完成，必要时可在 content 中说明原因。",
   },
 );
 
@@ -124,11 +123,11 @@ const todoItemSchema = Type.Object(
   {
     id: Type.String({
       description:
-        "Stable unique identifier used to edit this todo in later calls. Pick something short and memorable so you can reuse it with merge=true to flip status.",
+        "稳定且唯一的标识符，用于后续调用中编辑此待办。选择简短、易记的值，以便通过 merge=true 更新其状态。",
     }),
     content: Type.String({
       description:
-        "Imperative description of the task, such as 'Run tests' or 'Update README model section'. One sentence; no narration.",
+        "使用祈使句描述任务，例如“运行测试”或“更新 README 中的模型章节”。用一句话表达，不要叙述过程。",
     }),
     status: todoStatusSchema,
   },
@@ -139,17 +138,17 @@ const todoWriteSchema = Type.Object(
   {
     merge: Type.Boolean({
       description:
-        "false = replace the entire list (use this when you first plan the work). true = upsert by id (use this to flip a single todo's status without re-sending the rest).",
+        "false = 替换整个列表（首次规划时使用）。true = 按 id 更新或插入（只需更新单项状态时使用，不必重新发送其他待办）。",
     }),
     todos: Type.Array(todoItemSchema, {
       description:
-        "Todo items to write. With merge=false, pass the full desired list. With merge=true, pass only the items being added or updated.",
+        "要写入的待办。merge=false 时传入完整列表；merge=true 时只传入新增或更新的项目。",
     }),
   },
   { additionalProperties: false },
 );
 
-type TodoWriteParams = Static<typeof todoWriteSchema>;
+ type TodoWriteParams = Static<typeof todoWriteSchema>;
 
 export interface TodoWriteToolStorage {
   getTodos(): TurnTodo[];
@@ -159,25 +158,25 @@ export interface TodoWriteToolStorage {
 const agentOverrideSchema = Type.Partial(
   Type.Object(
     {
-      prompt: Type.String({ description: "Replacement user prompt for this agent state." }),
+      prompt: Type.String({ description: "替换此 agent 状态的用户提示词。" }),
       systemPrompt: Type.String({
-        description: "Replacement system prompt appended for this sub-agent only.",
+        description: "仅追加到此子 Agent 的系统提示词。",
       }),
       allowedSkills: Type.Array(Type.String(), {
         description:
-          "Skill names to inject into this sub-agent. Omit to inject all available skills.",
+          "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
       }),
       cwd: Type.String({
         description:
-          "Replacement working directory for this sub-agent's coding tools (bash, read, write, edit). Set this whenever the work happens outside the session cwd — a git worktree, clone, or scratch dir a previous state created — instead of telling the sub-agent to `cd` in the prompt; the tools start here, so a path written into the prompt does not redirect them.",
+          "替换此子 Agent 编程工具（bash、read、write、edit）的工作目录。如果工作位于会话 cwd 之外（例如先前状态创建的 git worktree、克隆目录或临时目录），应在此设置，而不要在提示词中要求子 Agent 执行 `cd`；工具会从此目录启动，写在提示词中的路径不会重定向工具。",
       }),
       inputSchema: Type.Record(Type.String(), Type.Any(), {
         description:
-          'Replacement valid JSON Schema object for transition input accepted by this state, such as { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }. Fields omitted from required are optional.',
+          '替换此状态接受的有效 JSON Schema 对象，用于定义转换输入，例如 { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }。未列入 required 的字段为可选字段。',
       }),
       forkContext: Type.Boolean({
         description:
-          "When true, this sub-agent starts with a verbatim copy of the parent runner's full conversation context (prior discussion, decisions, tool history) instead of a fresh empty transcript. Defaults to false (fresh context), which is right for narrow, self-contained tasks. Set true only when the task depends on prior thread context that would be tedious or lossy to restate via prompt/input — forking copies the entire parent transcript, so leave it off for self-contained work.",
+          "为 true 时，此子 Agent 会从父运行器完整对话上下文的逐字副本（先前讨论、决策、工具历史）开始，而不是使用空白的新转录。默认 false（新上下文），适用于范围明确且独立的任务。只有当任务依赖于难以或不适合通过 prompt/input 重述的先前对话上下文时才设为 true；fork 会复制整个父级转录，因此独立任务应保持关闭。",
       }),
     },
     { additionalProperties: false },
@@ -187,17 +186,17 @@ const agentOverrideSchema = Type.Partial(
 const scriptOverrideSchema = Type.Partial(
   Type.Object(
     {
-      command: Type.String({ description: "Replacement shell command for this script state." }),
+      command: Type.String({ description: "替换此脚本状态的 shell 命令。" }),
       cwd: Type.String({
-        description: "Replacement working directory for the command.",
+        description: "替换命令的工作目录。",
       }),
-      timeoutMs: Type.Number({ description: "Replacement command timeout in milliseconds." }),
+      timeoutMs: Type.Number({ description: "替换命令的超时时间，单位为毫秒。" }),
       successCodes: Type.Array(Type.Number(), {
-        description: "Replacement exit codes treated as successful completion.",
+        description: "替换视为成功完成的退出码列表。",
       }),
       inputSchema: Type.Record(Type.String(), Type.Any(), {
         description:
-          'Replacement valid JSON Schema object for transition input accepted by this state, such as { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }. Fields omitted from required are optional.',
+          '替换此状态接受的有效 JSON Schema 对象，用于定义转换输入，例如 { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }。未列入 required 的字段为可选字段。',
       }),
     },
     { additionalProperties: false },
@@ -223,7 +222,7 @@ const pollOverrideSchema = Type.Partial(
       }),
       inputSchema: Type.Record(Type.String(), Type.Any(), {
         description:
-          'Replacement valid JSON Schema object for transition input accepted by this state, such as { "type": "object", "properties": { "messageId": { "type": "string" } }, "required": ["messageId"] }. Fields omitted from required are optional.',
+          '替换此状态接受的有效 JSON Schema 对象，用于定义转换输入，例如 { "type": "object", "properties": { "messageId": { "type": "string" } }, "required": ["messageId"] }. Fields omitted from required are optional.',
       }),
     },
     { additionalProperties: false },
@@ -243,7 +242,7 @@ const timerOverrideSchema = Type.Partial(
       }),
       inputSchema: Type.Record(Type.String(), Type.Any(), {
         description:
-          'Replacement valid JSON Schema object for transition input accepted by this state, such as { "type": "object", "properties": { "scheduledAt": { "type": "number" } }, "required": ["scheduledAt"] }. Fields omitted from required are optional.',
+          '替换此状态接受的有效 JSON Schema 对象，用于定义转换输入，例如 { "type": "object", "properties": { "scheduledAt": { "type": "number" } }, "required": ["scheduledAt"] }. Fields omitted from required are optional.',
       }),
     },
     { additionalProperties: false },
@@ -286,14 +285,14 @@ const stateOverrideSchema = Type.Union([
 ]);
 
 const baseStateSchema = {
-  name: Type.String({ description: "State name used by select_state_machine_state." }),
+  name: Type.String({ description: "供 select_state_machine_state 使用的状态名称。" }),
   when: Type.Optional(
-    Type.String({ description: "Guidance for when the parent runner should select this state." }),
+    Type.String({ description: "指导父运行器在什么情况下应选择此状态。" }),
   ),
   inputSchema: Type.Optional(
     Type.Record(Type.String(), Type.Any(), {
       description:
-        'Valid JSON Schema object for the input the parent must pass when selecting this state, such as { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }. Fields omitted from required are optional. Template strings read values from this object.',
+        '有效 JSON Schema 对象，用于定义父运行器选择此状态时必须传入的输入，例如 { "type": "object", "properties": { "email": { "type": "string" }, "followUpCount": { "type": "integer" } }, "required": ["email"] }。未列入 required 的字段为可选字段。模板字符串可从此对象读取值。',
     }),
   ),
 };
@@ -301,29 +300,29 @@ const baseStateSchema = {
 const agentStateSchema = Type.Object(
   {
     ...baseStateSchema,
-    kind: Type.Literal("agent", { description: "Run a sub-agent for this state." }),
+    kind: Type.Literal("agent", { description: "为此状态运行子 Agent。" }),
     prompt: Type.String({
-      description: "User prompt sent to the sub-agent. May use templates like {{ input.email }}.",
+      description: "发送给子 Agent 的用户提示词。可使用 {{ input.email }} 等模板。",
     }),
     systemPrompt: Type.Optional(
-      Type.String({ description: "Optional system prompt appended for this sub-agent only." }),
+      Type.String({ description: "仅追加给此子 Agent 的可选系统提示词。" }),
     ),
     allowedSkills: Type.Optional(
       Type.Array(Type.String(), {
         description:
-          "Skill names to inject into this sub-agent. Omit to inject all available skills.",
+          "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
       }),
     ),
     cwd: Type.Optional(
       Type.String({
         description:
-          "Working directory for this sub-agent's coding tools (bash, read, write, edit). Set this whenever the work happens outside the session cwd — a git worktree, clone, or scratch dir a previous state created — instead of telling the sub-agent to `cd` in the prompt; the tools start here, so a path written into the prompt does not redirect them. Defaults to the state-machine session cwd.",
+          "此子 Agent 编程工具（bash、read、write、edit）的工作目录。如果工作位于会话 cwd 之外（例如先前状态创建的 git worktree、克隆目录或临时目录），应在此设置，而不要在提示词中要求子 Agent 执行 `cd`；工具会从此目录启动，写在提示词中的路径不会重定向工具。默认使用状态机 session cwd。",
       }),
     ),
     forkContext: Type.Optional(
       Type.Boolean({
         description:
-          "When true, the sub-agent starts with a verbatim copy of the parent runner's full conversation context (prior discussion, decisions, tool history) instead of a fresh empty transcript. Defaults to false (fresh context), which is right for narrow, self-contained tasks. Set true only when the task depends on prior thread context that would be tedious or lossy to restate in the prompt — forking copies the entire parent transcript, so leave it off for self-contained work to keep the delegation cheaper and cleaner.",
+          "为 true 时，子 Agent 会从父运行器完整对话上下文的逐字副本（先前讨论、决策、工具历史）开始，而不是使用空白的新转录。默认 false（新上下文），适用于范围明确且独立的任务。只有当任务依赖于难以或不适合通过 prompt 重述的先前对话上下文时才设为 true；fork 会复制整个父级转录，因此独立任务应保持关闭，以减少委派成本并保持上下文清晰。",
       }),
     ),
   },
@@ -333,20 +332,19 @@ const agentStateSchema = Type.Object(
 const scriptStateSchema = Type.Object(
   {
     ...baseStateSchema,
-    kind: Type.Literal("script", { description: "Run a shell command for this state." }),
+    kind: Type.Literal("script", { description: "为此状态运行 shell 命令。" }),
     command: Type.String({
-      description: "Shell command to execute. May use templates like {{ input.email }}.",
+      description: "要执行的 shell 命令。可使用 {{ input.email }} 等模板。",
     }),
     cwd: Type.Optional(
       Type.String({
-        description:
-          "Working directory for the command. Defaults to the state-machine session cwd.",
+        description: "命令的工作目录。默认使用状态机 session cwd。",
       }),
     ),
-    timeoutMs: Type.Optional(Type.Number({ description: "Command timeout in milliseconds." })),
+    timeoutMs: Type.Optional(Type.Number({ description: "命令超时时间，单位为毫秒。" })),
     successCodes: Type.Optional(
       Type.Array(Type.Number(), {
-        description: "Exit codes treated as successful completion. Defaults to [0].",
+        description: "视为成功完成的退出码。默认为 [0]。",
       }),
     ),
   },
@@ -356,27 +354,26 @@ const scriptStateSchema = Type.Object(
 const pollStateSchema = Type.Object(
   {
     ...baseStateSchema,
-    kind: Type.Literal("poll", { description: "Perform one external wait/check attempt." }),
+    kind: Type.Literal("poll", { description: "执行一次外部等待/检查。" }),
     intervalMs: Type.Union([Type.Number(), Type.String()], {
       description:
-        'Recurring delay before the next scheduled poll attempt. Accepts a duration string like "3h" or "5d", or a raw number of milliseconds.',
+        '下一次计划轮询前的重复等待时间。可使用 "3h" 或 "5d" 等时长字符串，也可使用毫秒数。',
     }),
     timeoutMs: Type.Optional(
-      Type.Number({ description: "Maximum time this state may remain polling." }),
+      Type.Number({ description: "此状态最多可保持轮询的时间。" }),
     ),
     command: Type.String({
       description:
-        "Shell command for one poll attempt. Return non-empty JSON only when polling found a result.",
+        "每次轮询尝试执行的 shell 命令。只有在轮询发现结果时才返回非空 JSON。",
     }),
     cwd: Type.Optional(
       Type.String({
-        description:
-          "Working directory for the poll command. Defaults to the state-machine session cwd.",
+        description: "轮询命令的工作目录。默认使用状态机 session cwd。",
       }),
     ),
     successCodes: Type.Optional(
       Type.Array(Type.Number(), {
-        description: "Exit codes that mean this poll attempt found a result.",
+        description: "表示此次轮询发现结果的退出码。",
       }),
     ),
   },
@@ -388,18 +385,18 @@ const timerStateSchema = Type.Object(
     ...baseStateSchema,
     kind: Type.Literal("timer", {
       description:
-        "Sleep until a future time, then resume with elapsedMs and timestamp output. Specify exactly one of wakeAt (absolute) or wakeAfterMs (relative).",
+        "休眠至未来某个时间，然后以 elapsedMs 和 timestamp 输出恢复。wakeAt（绝对时间）与 wakeAfterMs（相对时长）必须且只能指定一个。",
     }),
     wakeAt: Type.Optional(
       Type.Union([Type.Number(), Type.String()], {
         description:
-          'Absolute wake time when this timer state should complete. Accepts an ISO 8601 date string like "2026-05-24T18:00:00Z" or a Unix-epoch millisecond number. Mutually exclusive with wakeAfterMs.',
+          '此 timer 状态应完成的绝对唤醒时间。可使用 ISO 8601 日期字符串，例如 "2026-05-24T18:00:00Z"，或 Unix 纪元毫秒数。不能与 wakeAfterMs 同时使用。',
       }),
     ),
     wakeAfterMs: Type.Optional(
       Type.Union([Type.Number(), Type.String()], {
         description:
-          'Relative duration measured from the moment the parent selects this timer state, after which the timer should complete. Accepts a duration string like "3h" or "5d", or a raw number of milliseconds. Mutually exclusive with wakeAt.',
+          '从父运行器选择此 timer 状态时开始计算的相对时长，计时结束后状态完成。可使用 "3h" 或 "5d" 等时长字符串，也可使用毫秒数。不能与 wakeAt 同时使用。',
       }),
     ),
   },
@@ -411,7 +408,7 @@ const parkStateSchema = Type.Object(
     ...baseStateSchema,
     kind: Type.Literal("park", {
       description:
-        "Hold the machine without running work or scheduling a wake while the parent drives.",
+        "暂停状态机，不运行任务也不安排唤醒，由父运行器决定后续操作。",
     }),
   },
   { additionalProperties: false },
@@ -420,13 +417,13 @@ const parkStateSchema = Type.Object(
 const terminalStateSchema = Type.Object(
   {
     ...baseStateSchema,
-    kind: Type.Literal("terminal", { description: "Finalize the state-machine session." }),
+    kind: Type.Literal("terminal", { description: "结束状态机 session。" }),
     status: Type.Union([
-      Type.Literal("completed", { description: "The state machine completed successfully." }),
-      Type.Literal("failed", { description: "The state machine failed." }),
-      Type.Literal("cancelled", { description: "The state machine was cancelled." }),
+      Type.Literal("completed", { description: "状态机已成功完成。" }),
+      Type.Literal("failed", { description: "状态机执行失败。" }),
+      Type.Literal("cancelled", { description: "状态机已取消。" }),
     ]),
-    reason: Type.Optional(Type.String({ description: "Optional final explanation for the user." })),
+    reason: Type.Optional(Type.String({ description: "可选的最终说明，供用户查看。" })),
   },
   { additionalProperties: false },
 );
@@ -471,18 +468,18 @@ export type StateMachineStateOverride =
 
 const stateMachineDefinitionSchema = Type.Object(
   {
-    name: Type.String({ description: "Human-readable state-machine name." }),
+    name: Type.String({ description: "便于识别的状态机名称。" }),
     prompt: Type.String({
-      description: "Routing guidance explaining when this state-machine definition applies.",
+      description: "说明此状态机定义适用场景的路由指导。",
     }),
     states: Type.Array(stateMachineStateSchema, {
-      description: "Available states the parent runner may select.",
+      description: "父运行器可选择的状态列表。",
     }),
   },
   {
     additionalProperties: false,
     description:
-      "State-machine definition. Use inputSchema plus {{ input.foo }} templates for state prompts and commands that need transition input.",
+      "状态机定义。若状态提示词或命令需要转换输入，请使用 inputSchema 和 {{ input.foo }} 模板。",
   },
 );
 
@@ -491,12 +488,12 @@ const createDefinitionSchema = Type.Object(
     definition: stateMachineDefinitionSchema,
     firstState: Type.String({
       description:
-        "Name of the state in `definition.states` to run first after creating the definition.",
+        "创建定义后首先运行的状态名称；该状态必须存在于 `definition.states` 中。",
     }),
     replaceActive: Type.Optional(
       Type.Boolean({
         description:
-          "Set to true ONLY to deliberately abandon the state machine that is currently running and replace it with this new one. Creating a definition while a machine is still active is otherwise rejected: the active machine must first reach a terminal (advance or end it with select_state_machine_state). When this is true the runner cancels the active machine and starts this one in its place. Defaults to false, so an agent that did not realize a machine was running cannot clobber it by accident.",
+          "仅当确实要放弃当前正在运行的状态机并用此新状态机替换时设为 true。若当前仍有活动状态机，创建新定义会被拒绝；必须先通过 select_state_machine_state 推进至终态或结束它。设为 true 时，运行器会取消活动状态机并以此状态机替代。默认 false，避免 Agent 未意识到已有状态机运行时意外覆盖它。",
       }),
     ),
   },
@@ -512,25 +509,25 @@ const selectStateSchema = Type.Object(
       {
         state: Type.String({
           description:
-            "Name of the state to advance to. Must exactly match one of the names declared in the active definition (including the auto-injected `failed` and `cancelled` terminal escape hatches). Selecting a terminal state ends the state machine.",
+            "要推进到的状态名称。必须与活动定义中声明的某个名称完全匹配（包括自动注入的 `failed` 和 `cancelled` 终态出口）。选择终态会结束状态机。",
         }),
         reason: Type.Optional(
           Type.String({
             description:
-              "Free-form explanation attached to the resulting terminal when `state` names a terminal state. Ignored for non-terminal states.",
+              "当 `state` 指向终态时，附加到终态的自由文本说明。对非终态无效。",
           }),
         ),
         override: Type.Optional(stateOverrideSchema),
         persistOverride: Type.Optional(
           Type.Boolean({
             description:
-              "When `override` is set, controls whether the override is merged into the active state-machine definition (so the change sticks for every future run of this state) or applied as a one-shot just for this transition. Defaults to true — the orchestrator's typical reason to override is to tune a sub-agent prompt or fix a script command, and that tuning should persist. Set to false when you want to try a variation without committing it, e.g. probing a different prompt to see if the sub-agent recovers before deciding whether to keep the change. Ignored when `override` is omitted. Terminal selections accept only decision.state and decision.reason; omit override, input, and persistOverride.",
+              "设置 `override` 时，用于控制是否将覆盖合并到活动状态机定义中（让更改持续应用于此状态的后续每次运行），还是仅对本次转换生效。默认为 true——编排者通常通过覆盖来调整子 Agent 提示词或修复脚本命令，这些调整通常应保留。设为 false 可临时试用某种变化，例如先测试子 Agent 能否恢复，再决定是否保留。省略 `override` 时此字段无效。选择终态时只接受 decision.state 和 decision.reason；不要传入 override、input 或 persistOverride。",
           }),
         ),
         input: Type.Optional(
           Type.Record(Type.String(), Type.Any(), {
             description:
-              "Input object for the selected state. Required when the state inputSchema requires fields; templates read values as {{ input.field }}.",
+              "传给所选状态的输入对象。当状态的 inputSchema 要求字段时必须提供；模板可通过 {{ input.field }} 读取值。",
           }),
         ),
       },
@@ -548,30 +545,27 @@ export interface CurrentStateMachineStateResult {
   currentState?: string;
   currentInput?: Record<string, unknown>;
   terminal?: StateMachineTerminalResult;
-  /** Compact per-state counters for obvious progress questions. */
+  /** 每个状态的紧凑计数，用于回答明显的进度问题。 */
   progress?: StateMachineProgress;
-  /** Total state-machine history records; `history` below is only the recent tail. */
+  /** 状态机历史记录总数；下面的 `history` 仅包含最近的尾部。 */
   historyCount: number;
-  /** Transient output from the currently running state, if one is active. */
+  /** 当前运行状态的临时输出（如果有活动状态）。 */
   activeOutput?: ActiveStateOutput;
   history: StateMachineSessionEvent[];
 }
 
-// A runner decision is simply "go to this state, optionally with these
-// transition extras". The state's own `kind` (agent/script/poll/timer/terminal)
-// in the definition drives dispatch; the decision does not need to restate it.
-// To end the machine in failure, select the auto-injected `failed` terminal
-// (and optionally attach a `reason`) — there is no separate fail verb.
+// runner decision 只是“前往此状态，可选地携带这些转换附加项”。定义中的状态自身
+// `kind`（agent/script/poll/timer/terminal）驱动分发；decision 不需要重复声明它。
+// 要让机器以失败结束，请选择自动注入的 `failed` 终态（并可附加 `reason`）——
+// 不存在独立的 fail 动词。
 export interface StateMachineRunnerDecision {
   state: string;
   reason?: string;
   override?: StateMachineStateOverride;
   /**
-   * When true (the default), an `override` is merged into the active
-   * state-machine definition so future runs of the same state see the
-   * tuned prompt/command/schedule. When false, the override applies only
-   * to this transition and the stored definition is unchanged. Ignored
-   * when `override` is undefined or when the target state is terminal.
+   * 为 true（默认）时，`override` 会合并到当前状态机定义中，使同一状态的未来运行
+   * 看到调整后的 prompt/command/schedule。为 false 时，override 只应用于本次转换，
+   * 保存的定义不变。当 `override` 未定义或目标状态为终态时忽略此字段。
    */
   persistOverride?: boolean;
   input?: Record<string, unknown>;
@@ -606,7 +600,7 @@ interface TurnRunnerToolsInput {
   todoStorage: TodoWriteToolStorage;
   getDefinition?: () => StateMachineDefinition | undefined;
   getStateMachine?: () => StateMachineSession | undefined;
-  /** Persist an edited definition without selecting it; reject states with live execution or a scheduled wake. */
+  /** 保存编辑后的定义但不选择它；拒绝仍在执行或已有计划唤醒的状态。 */
   updateStateDefinition?: (state: StateMachineState) => void;
   getActiveStateOutput?: () => ActiveStateOutput | undefined;
   skills?: readonly Skill[];
@@ -618,57 +612,52 @@ interface TurnRunnerToolsInput {
 
 export interface RecallMemoryToolStorage {
   /**
-   * Returns the memory session backing the runner's durable memory, or
-   * undefined when memory persistence is disabled (one-shot tools, tests).
-   * The recall_memory tool no-ops when undefined so the model never sees a
-   * tool whose backing store is missing. The session is fetched per call
-   * so recall sees the runner's current persistence handle even after a
-   * lazy load completes mid-session.
+   * 返回支撑 runner 持久化记忆的 Memory session；禁用记忆持久化时返回 undefined
+   *（一次性工具、测试）。undefined 时，recall_memory 工具不执行任何操作，模型不会
+   * 看到一个缺少后端存储的工具。每次调用都重新获取 session，使 recall 在本次 session
+   * 中延迟加载完成后仍能看到 runner 当前的持久化句柄。
    */
   getSession: () => MemorySession | undefined;
   /**
-   * Embedding callable. Optional: when undefined or when calls fail,
-   * recall falls back to keyword-only retrieval. Built once per runner
-   * by the embedding client so connection reuse amortizes TLS setup.
+   * embedding callable。可选：未定义或调用失败时，recall 回退为仅关键词检索。
+   * 每个 runner 通过 embedding client 创建一次，以摊薄连接复用的 TLS 开销。
    */
   embed?: EmbedFn;
-  /** Current session id for scope filtering. */
+  /** 用于 scope 过滤的当前 session id。 */
   sessionId?: string;
   /**
-   * Model used by the optional `expand` flag to generate paraphrases.
-   * Resolved by the runner so query expansion shares the same memory
-   * model as the observer/reflector — typically a cheap model like
-   * Haiku or Gemini Flash.
+   * `expand` flag 用来生成改写的模型。由 runner 解析，使查询扩展与 observer/reflector
+   * 使用同一个 memory model——通常是 Haiku 或 Gemini Flash 这类低成本模型。
    */
   expansionModel?: string;
 }
 
-/** Lazy runtime inputs and router actions used by the parent-only advisor tool. */
+/** parent-only advisor 工具使用的延迟运行时输入和 router 操作。 */
 export interface AskAdvisorToolStorage {
-  /** Captures and policy-bounds executor context for the resolved advisor's hard window. */
+  /** 为解析后的 advisor 捕获并按策略限制 executor 上下文，以适配其硬窗口。 */
   getContext: (contextWindowTokens: number) => Promise<AdvisorExecutorContext>;
-  /** Resolves the advisor identity and hard model window lazily at tool execution. */
+  /** 在工具执行时延迟解析 advisor 身份和硬模型窗口。 */
   resolveModel: () => {
-    /** Resolved catalog model id passed to the advisor call. */
+    /** 传给 advisor 调用的已解析 catalog model id。 */
     modelName: string;
-    /** Advertised input-plus-output context window used as the final safety ceiling. */
+    /** 作为最终安全上限的、对外公布的输入加输出上下文窗口。 */
     contextWindowTokens: number;
-    /** Whether this concrete provider model accepts image request parts. */
+    /** 此具体 provider model 是否接受图像请求部分。 */
     acceptsImages: boolean;
   };
-  /** Reasoning effort selected by the routed tier. */
+  /** 由路由 tier 选择的 reasoning effort。 */
   thinkingLevel: ThinkingLevel;
-  /** Atomically checks the floor and reserves the router's advisor slot when allowed. */
+  /** 获准时原子地检查下限并预留 router 的 advisor slot。 */
   advisorGate: () => AdvisorGate;
-  /** Releases the reserved slot; false never stamps the floor or requests classification. */
+  /** 释放已预留的 slot；false 不会写入下限或请求分类。 */
   noteAdvisorConsult: (success?: boolean) => void;
-  /** Attributes a completed advisor request to the running turn before the tool returns. */
+  /** 在工具返回前，将已完成的 advisor 请求归因到正在运行的 turn。 */
   recordUsage: (usage: Usage) => void;
-  /** Reports accounting failures without discarding advice the provider already returned. */
+  /** 报告 accounting 失败，但不丢弃 provider 已返回的建议。 */
   onUsageError?: (error: unknown) => void;
-  /** Reports a failed consultation while allowing the executor to continue. */
+  /** 报告咨询失败，同时允许 executor 继续。 */
   onAdvisorError?: (error: unknown) => void;
-  /** Network seam for deterministic tool tests; production uses callAdvisor. */
+  /** 用于确定性工具测试的网络接缝；生产环境使用 callAdvisor。 */
   callAdvisor?: (input: CallAdvisorInput) => Promise<AdvisorResult>;
 }
 
@@ -732,7 +721,7 @@ export function createTurnRunnerTools(input: TurnRunnerToolsInput): AgentTool[] 
 
 const askAdvisorSchema = Type.Object({}, { additionalProperties: false });
 
-/** Build the no-parameter, non-terminating advisor consultation tool. */
+/** 构造无参数、不会终止回合的 advisor 咨询工具。 */
 export function createAskAdvisorTool(
   storage: AskAdvisorToolStorage,
 ): AgentTool<typeof askAdvisorSchema> {
@@ -802,7 +791,7 @@ export function createAskAdvisorTool(
           try {
             storage.onUsageError?.(error);
           } catch {
-            // Logging is best-effort; valid advisor output still wins.
+            // 日志记录尽力而为；只要 advisor 输出有效，仍以该输出为准。
           }
         }
         endConsult(true);
@@ -821,7 +810,7 @@ export function createAskAdvisorTool(
         try {
           storage.onAdvisorError?.(error);
         } catch {
-          // Logging is best-effort; the executor must still continue.
+          // 日志记录尽力而为；executor 仍必须继续。
         }
         return {
           content: [
@@ -839,12 +828,11 @@ export function createAskAdvisorTool(
 }
 
 /**
- * Builds the agent-facing error thrown when `create_state_machine_definition`
- * is called while a machine is still running and `replaceActive` was not set.
- * The message names the active machine and its current state so the agent —
- * which may not have realized a machine was running — can decide whether to
- * advance/end it with select_state_machine_state or deliberately replace it
- * with `replaceActive: true`.
+ * 构造在机器仍运行且未设置 `replaceActive` 时调用
+ * `create_state_machine_definition` 所抛出的、面向 Agent 的错误。
+ * 消息会列出活动机器及其当前状态，使可能没有意识到机器正在运行的 Agent
+ * 能决定是否使用 select_state_machine_state 推进/结束它，或使用
+ * `replaceActive: true` 有意替换它。
  */
 function activeStateMachineCreateError(session: StateMachineSession): string {
   const name = session.definition.name;
@@ -866,12 +854,11 @@ function createAskUserQuestionTool(): AgentTool<typeof askUserQuestionSchema> {
     executionMode: "sequential",
     label: "Ask user question",
     description:
-      "Ask the user one or more structured multiple-choice questions. Use this when progress requires user input before continuing.",
+      "向用户提出一个或多个结构化选择题。继续任务需要用户输入时使用。",
     parameters: askUserQuestionSchema,
     async execute(_toolCallId, params) {
-      // The schema declares minItems: 1 on options, but defend at runtime too:
-      // some providers will still emit an empty options array, which would
-      // leave the user with no answers to pick and stall the turn.
+      // schema 在 options 上声明了 minItems: 1，但运行时仍需防御：某些 provider 仍会
+      // 产生空 options 数组，这会让用户没有可选答案并使 turn 停滞。
       const emptyIndex = params.questions.findIndex((question) => question.options.length === 0);
       if (emptyIndex !== -1) {
         throw new Error(
@@ -895,25 +882,25 @@ const recallMemorySchema = Type.Object(
   {
     query: Type.String({
       description:
-        "Free-text description of what to recall. Use proper nouns, code symbols, or short paraphrases of the user's prior statements; the search is hybrid (vector + keyword), so both fuzzy and exact matches work.",
+        "用自然语言描述要回忆的内容。可使用专有名词、代码符号或对用户先前表述的简短改写；检索采用向量与关键词混合方式，因此模糊改写和精确匹配均可。",
     }),
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
         maximum: 20,
-        description: "Maximum results to return. Default 8.",
+        description: "最多返回的结果数。默认值为 8。",
       }),
     ),
     scope: Type.Optional(
       Type.Union([Type.Literal("session"), Type.Literal("global"), Type.Literal("all")], {
         description:
-          "'session' restricts to the current conversation, 'global' to every other session, 'all' (default) searches both.",
+          "'session' 仅搜索当前对话，'global' 仅搜索其他会话，'all'（默认值）搜索两者。",
       }),
     ),
     expand: Type.Optional(
       Type.Boolean({
         description:
-          "When true, the agent runs the original query plus two paraphrased variants and fuses the result sets. Useful when the first call returned weak results; off by default to keep latency low.",
+          "为 true 时，Agent 会将原始查询和两个改写版本一并检索，并融合结果集。首次查询结果较弱时可启用；默认关闭以降低延迟。",
       }),
     ),
   },
@@ -927,9 +914,9 @@ function createRecallMemoryTool(
     name: "recall_memory",
     label: "Recall memory",
     description: dedent`
-      Search the user's durable memory for facts, decisions, and prior context from past conversations.
+      搜索用户的持久记忆，以查找过去对话中的事实、决策和背景信息。
 
-      Hybrid retrieval (vector embeddings + keyword) ranks results by reciprocal rank fusion. Use \`scope: "global"\` to look only at other sessions, \`"session"\` for the current one, or \`"all"\` (default) when unsure. Pass \`expand: true\` to run paraphrased variants alongside the original query when a first pass returned weak results.
+      混合检索（向量嵌入 + 关键词）使用 reciprocal rank fusion 对结果排序。若只搜索其他会话，使用 \`scope: "global"\`；若只搜索当前会话，使用 \`"session"\`；不确定时使用 \`"all"\`（默认值）。首次查询结果较弱时，可传入 \`expand: true\`，同时检索原始查询及其改写版本。
     `,
     parameters: recallMemorySchema,
     async execute(_toolCallId, params) {
@@ -956,8 +943,7 @@ function createRecallMemoryTool(
           limit,
           scope,
           ...(storage.sessionId ? { sessionId: storage.sessionId } : {}),
-          // Only expand when the model asked for it and a paraphrase model is
-          // configured; otherwise stay on the cheap single-query path.
+          // 只有模型请求扩展且已配置 paraphrase model 时才扩展；否则保持低成本的单查询路径。
           ...(params.expand && storage.expansionModel
             ? { expansionModel: storage.expansionModel }
             : {}),
@@ -966,9 +952,8 @@ function createRecallMemoryTool(
       const summary = observations.length
         ? observations.map(formatRecallHit).join("\n\n")
         : "(no matches)";
-      // Degraded only when the vector path actually failed (embed threw
-      // or the query errored). Zero vector hits from a healthy index are
-      // a successful search and render the normal header.
+      // 只有向量路径实际失败时才算降级（embed 抛错或查询出错）。健康索引返回零条向量命中
+      // 仍是成功检索，应渲染正常标题。
       const header =
         vectorSearchAttempted && !vectorSearchSucceeded
           ? "# Memory recall (keyword-only fallback; semantic search unavailable)"
@@ -990,9 +975,8 @@ function createRecallMemoryTool(
 }
 
 function formatRecallHit(observation: Observation): string {
-  // Mirror the rendering used in the static memory section so the
-  // model sees one consistent shape across the prompt prefix and the
-  // tool's tool-result payload.
+  // 复用静态 memory section 中的渲染方式，使模型在 prompt 前缀和工具结果 payload
+  // 中看到一致的形状。
   const time = observation.timeOfDay ? ` ${observation.timeOfDay}` : "";
   const referenced = observation.referencedDate ? ` [ref: ${observation.referencedDate}]` : "";
   const session = observation.sessionId ? ` (session ${observation.sessionId})` : "";
@@ -1008,25 +992,25 @@ export function createTodoWriteTool(
     name: "todo_write",
     label: "Write todos",
     description: dedent`
-      Track multi-step work that you are doing yourself in this conversation, as a structured, visible todo list. The list is shown to the user in real time — it is your shared scratchpad of "what we agreed to do" and "where we are."
+      使用结构化、可见的待办列表跟踪你在本次对话中亲自处理的多步骤工作。列表会实时展示给用户，作为双方共同查看的“约定事项”和“当前进度”记录。
 
-      Reach for this tool when the steps require *your* ongoing reasoning and tool use in this transcript: edits you need to review, search results you need to keep referencing, or work where the user wants to see your moves as you make them. Use it whenever any of these are true:
-      - The user's message contains more than one independent task ("do X, also Y, and don't forget Z") and you will handle them yourself.
-      - The work needs three or more non-trivial steps to finish (research, edit, test, commit, etc.) that you will execute in this conversation.
-      - You are about to spend several tool calls on something — write the plan first so the user can see and correct it.
-      - You are resuming or interrupting work and want to make state explicit.
+      当步骤需要你在本次转录中持续推理和使用工具时，优先使用此工具：例如需要你审查的编辑、需要反复参考的搜索结果，或用户希望看到你逐步执行的工作。符合以下任一条件时应使用：
+      - 用户消息包含多个独立任务（“做 X，也做 Y，别忘了 Z”），且由你亲自处理。
+      - 工作需要三个或更多非平凡步骤才能完成（调查、编辑、测试、提交等），且会在本次对话中执行。
+      - 你即将连续调用多个工具——先写出计划，让用户查看并纠正。
+      - 你正在恢复或中断工作，希望明确当前状态。
 
-      Prefer a state machine over this tool when the steps are well-scoped enough that a sub-agent or script could complete each one on its own ("do X with these inputs and return the result"). State-machine states run outside this transcript, so their intermediate output does not consume your context — using todo_write for that kind of work pollutes the parent context with tool output you do not actually need to keep.
+      如果步骤的范围明确到可以由子 Agent 或脚本独立完成（“使用这些输入执行 X 并返回结果”），优先使用状态机，而不是此工具。状态机状态在本次转录之外运行，因此中间输出不会占用你的上下文；对这类工作使用 todo_write 会将你不需要保留的工具输出塞入父级上下文。
 
-      Agent states have no minimum duration; only poll intervalMs and timer wakeAt/wakeAfterMs have the 30-second floor. If you can already see the work will not fit in one session and you are tempted to recommend the user "continue in the next session," that is the signal that this tool was the wrong choice and a state machine was the right one. When work uses create_state_machine_definition, do NOT also call todo_write to mirror or track it: the state machine's states ARE the visible, live plan, so a parallel todo list duplicating those same phases is redundant and wrong. Dropping the todo list is the fix here, never dropping the state machine — session-spanning many-unit work still requires the state machine.
+      Agent 状态没有最短持续时间；只有 poll 的 intervalMs 和 timer 的 wakeAt/wakeAfterMs 有 30 秒下限。如果你已看出工作无法在一个会话内完成，并准备建议用户“下个会话继续”，这表示你选错了工具，应使用状态机。若工作使用 create_state_machine_definition，不要同时调用 todo_write 来重复跟踪：状态机的各状态就是可见的实时计划，并行维护重复阶段的待办列表既多余也不正确。正确做法是删去待办列表，绝不能删去状态机——跨会话的多单元工作仍需要状态机。
 
-      How to use it well:
-      - Lay out the full plan up front with merge=false. Mark exactly one item in_progress at a time.
-      - As you finish each item, call again with merge=true and just that item flipped to completed; advance the next one to in_progress in the same call.
-      - If the plan changes (user redirects, you discover new work), update the list immediately so it stays honest.
-      - Skip the tool for genuinely single-step requests — a one-shot answer or a single file edit doesn't need a list.
+      使用方法：
+      - 开始时使用 merge=false 写出完整计划。每次恰好标记一项为 in_progress。
+      - 完成一项后再次调用 merge=true，只传入该项并将其状态改为 completed；同时将下一项设为 in_progress。
+      - 计划变化时（用户调整方向或发现新工作），立即更新列表，确保它如实反映进度。
+      - 真正的一步请求无需使用此工具，例如一次性回答或单文件编辑。
 
-      Treat "the user gave me a list of asks I will handle myself" as an automatic cue to call this tool before doing anything else.
+      用户列出多个由你亲自处理的任务时，应立即调用此工具。
     `,
     parameters: todoWriteSchema,
     async execute(_toolCallId, params) {
@@ -1081,23 +1065,16 @@ function formatTodoWriteResult(todos: TurnTodo[]): string {
 }
 
 /**
- * Build the prompt body delivered to the parent on its acknowledgment
- * turn — the extra parent prompt run by the turn runner after every
- * state-machine terminal so the parent gets to react to the outcome in
- * natural language before control returns to the user.
+ * 构造发送给 parent 的 acknowledgment turn 的 prompt body——每次状态机进入终态后，
+ * turn runner 额外运行一次 parent prompt，使 parent 能在控制权返回用户前用自然语言
+ * 对结果作出回应。
  *
- * The framing is deliberately neutral on "decided vs runtime failure":
- * the parent's own transcript already shows whether it selected the
- * terminal (its preceding `select_state_machine_state` tool call) or
- * whether the state machine ended on its own, and the terminal
- * `status`/`reason` carry the rest of what the parent needs to phrase
- * the reply. The prompt steers the parent toward a plain-text summary
- * and, by default, away from a control action on this turn: the machine
- * has ended, so the parent normally summarizes and returns control
- * rather than proactively starting more work. Follow-up work (new
- * machine or reactivation) is user-driven — it waits for the user's
- * request or a standing instruction to keep going, not the parent's own
- * initiative.
+ * 这里对“主动决定还是运行时失败”有意保持中性：parent 自身的 transcript 已显示它是
+ * 主动选择了终态（前一条 `select_state_machine_state` 工具调用），还是状态机自行结束；
+ * 终态的 `status`/`reason` 会提供 parent 组织回复所需的其余信息。prompt 引导 parent
+ * 使用纯文本总结，并默认避免在本回合执行控制动作：机器已经结束，parent 通常应总结
+ * 并交还控制权，而不是主动启动更多工作。后续工作由用户驱动——等待用户请求或持续
+ * 执行的既有指令，而不是 parent 自己发起。
  */
 export function formatStateMachineTerminalAcknowledgmentPrompt(input: {
   session: StateMachineSession;
@@ -1142,8 +1119,7 @@ export function formatCarriedTodosReminder(todos: TurnTodo[] | undefined): strin
 
 function createStateMachineDefinitionTool(
   getStateMachine: (() => StateMachineSession | undefined) | undefined,
-  // Base directory used to resolve a relative state `cwd` before checking it
-  // exists, matching the resolution used when the state actually runs.
+  // 用于在检查相对状态 `cwd` 是否存在前解析它的基础目录，与状态实际运行时使用的解析方式一致。
   baseCwd: string,
   scheduleValidation: {
     clock: RuntimeClock;
@@ -1155,13 +1131,13 @@ function createStateMachineDefinitionTool(
     executionMode: "sequential",
     label: "Create state machine definition",
     description: dedent`
-      Create a new state-machine definition for durable, multi-step, or recurring work. See the system prompt for full routing rules (when to choose this over todo_write, how states resume, terminal acknowledgment, etc.). This description only covers the call shape. The states you define here ARE the visible plan for this work, so do not also call todo_write to mirror or track the same phases; the state machine is already the plan surface.
+      为持久、多步骤或周期性工作创建新的状态机定义。完整路由规则（何时优先选择此工具而非 todo_write、状态如何恢复、终态确认等）请参阅系统提示词。此处仅说明调用结构。你定义的状态就是这项工作的可见计划，因此不要再调用 todo_write 镜像或跟踪相同阶段；状态机本身就是计划界面。
 
-      Call shape (top-level keys are \`definition\`, \`firstState\`, and optional \`replaceActive\` ONLY — every state goes inside \`definition.states\`, never at the top level):
+      调用结构（顶层键仅限 \`definition\`、\`firstState\` 和可选的 \`replaceActive\`；所有状态必须放在 \`definition.states\` 中，不能放在顶层）：
       {
         "definition": {
-          "name": "<human-readable state-machine name>",
-          "prompt": "<routing guidance for when this state machine applies>",
+          "name": "<易读的状态机名称>",
+          "prompt": "<说明何时适用此状态机的路由指导>",
           "states": [
             { "name": "step-1", "kind": "agent", "prompt": "..." },
             { "name": "step-2", "kind": "script", "command": "..." },
@@ -1171,24 +1147,21 @@ function createStateMachineDefinitionTool(
         "firstState": "step-1"
       }
 
-      State \`kind\` is one of \`agent\`, \`script\`, \`poll\`, \`timer\`, \`park\`, \`terminal\`. A park holds the machine without running work or scheduling a wake while you converse with or ask the user. Poll \`intervalMs\`, timer \`wakeAt\`, and timer \`wakeAfterMs\` must be ≥ 30 seconds; agent/script states have no minimum duration. Durations accept human-readable strings like \`"3h"\` or \`"5d"\` parsed by the \`ms\` package, and \`wakeAt\` accepts ISO 8601 strings like \`"2026-05-24T18:00:00Z"\`; raw millisecond numbers still work as a fallback. Timer states must set exactly one of \`wakeAt\` (absolute) or \`wakeAfterMs\` (relative from selection time). Every definition needs at least one \`terminal\` state with status "completed"; "failed" and "cancelled" terminals are auto-injected if omitted.
+      状态 \`kind\` 可取 \`agent\`、\`script\`、\`poll\`、\`timer\`、\`park\`、\`terminal\`。park 会暂停状态机，不运行工作也不安排唤醒，让你继续与用户交流或向用户提问。poll 的 \`intervalMs\`、timer 的 \`wakeAt\` 和 \`wakeAfterMs\` 必须至少为 30 秒；agent/script 状态没有最短时长。时长可使用 \`ms\` 包解析的可读字符串，例如 \`"3h"\` 或 \`"5d"\`；\`wakeAt\` 可使用 ISO 8601 字符串，例如 \`"2026-05-24T18:00:00Z"\`；也可使用毫秒数。timer 状态必须且只能设置一个字段：\`wakeAt\`（绝对时间）或 \`wakeAfterMs\`（从选择时刻起算的相对时长）。每个定义至少需要一个 status 为 "completed" 的 \`terminal\` 状态；若未提供，系统会自动注入 "failed" 和 "cancelled" 终态。
 
-      State prompts and script commands may use \`{{ input.foo }}\` templates — declare \`inputSchema\` on those states and pass matching \`decision.input\` when selecting them via select_state_machine_state. Agent states may set \`allowedSkills\` to restrict the skill set for that sub-agent.
+      状态提示词和脚本命令可使用 \`{{ input.foo }}\` 模板——请在相应状态声明 \`inputSchema\`，并在通过 select_state_machine_state 选择时传入匹配的 \`decision.input\`。Agent 状态可通过 \`allowedSkills\` 限制子 Agent 可用技能。
 
-      A per-state \`cwd\` must resolve to an existing directory at creation time, and a relative \`cwd\` resolves against the session working directory shown in the \`<cwd>\` block of the system prompt. If an earlier state creates that directory at runtime (a worktree, clone, or scratch dir), omit \`cwd\` here and set it via \`decision.override.state.cwd\` on select_state_machine_state once the directory exists — do not point \`cwd\` at a path that does not exist yet.
+      创建时，每个状态的 \`cwd\` 必须解析为现有目录；相对 \`cwd\` 会相对于系统提示词 \`<cwd>\` 区块中显示的会话工作目录解析。如果先前状态会在运行时创建该目录（worktree、克隆目录或临时目录），此处请省略 \`cwd\`，待目录存在后再通过 select_state_machine_state 的 \`decision.override.state.cwd\` 设置——不要将 \`cwd\` 指向尚不存在的路径。
 
-      Only use this when no state machine is active or the previous one has reached a terminal state; otherwise call select_state_machine_state. Creating a definition while a machine is still active is rejected unless you set \`replaceActive: true\` to deliberately cancel the running machine and replace it.
+      仅当当前没有活动状态机或先前状态机已到达终态时使用此工具；否则应调用 select_state_machine_state。若活动状态机仍在运行，创建新定义会被拒绝，除非设置 \`replaceActive: true\`，明确取消并替换当前状态机。
     `,
     parameters: createDefinitionSchema,
     async execute(_toolCallId, params) {
-      // Reject create-while-active unless the agent explicitly opts into
-      // replacing the running machine. The control tools terminate the worker
-      // turn after one call, so the agent could not end the old machine in this
-      // same turn — requiring replaceActive forces it to acknowledge the active
-      // machine instead of clobbering one it may not know is running. Throwing
-      // (rather than returning) keeps the worker turn alive so the agent can
-      // react to the error and either advance the active machine or retry with
-      // replaceActive: true.
+      // 除非 Agent 显式选择替换正在运行的机器，否则拒绝“运行中创建”。控制工具一次调用后
+      // 会终止 worker turn，因此 Agent 无法在同一回合结束旧机器——要求 replaceActive
+      // 会强制它确认当前机器，而不是覆盖一个它可能不知道正在运行的机器。抛出错误
+      //（而不是返回）可以让 worker turn 继续，使 Agent 能推进活动机器、或使用
+      // replaceActive: true 重试。
       const active = getStateMachine?.();
       if (active && !active.terminal && params.replaceActive !== true) {
         throw new Error(activeStateMachineCreateError(active));
@@ -1215,10 +1188,9 @@ function createStateMachineDefinitionTool(
 
 function createSelectStateTool(
   getDefinition: (() => StateMachineDefinition | undefined) | undefined,
-  // Base directory used to resolve a relative state/override `cwd` before
-  // checking it exists. Mirrors how the runner resolves a per-state cwd
-  // (`cwdOverride ?? config.cwd ?? process.cwd()`) so validation rejects the
-  // same missing directory the sub-agent's tools would otherwise start in.
+  // 用于在检查相对状态/override `cwd` 是否存在前解析基础目录。它复刻 runner 对每个状态 cwd
+  // 的解析方式（`cwdOverride ?? config.cwd ?? process.cwd()`），因此校验会拒绝与子 Agent
+  // 工具实际启动目录相同的缺失目录。
   baseCwd: string,
 ): AgentTool<typeof selectStateSchema> {
   return {
@@ -1226,11 +1198,11 @@ function createSelectStateTool(
     executionMode: "sequential",
     label: "Select state machine state",
     description: dedent`
-      Select the next state-machine state. Pass every selection field inside \`decision\`: {"decision":{"state":"work","override":{"kind":"agent","state":{"prompt":"Updated task","cwd":"/absolute/worktree"}}}}. Top-level override/input/persistOverride fields are invalid. \`decision.state\` must exactly match one of the state names declared in the active definition; the named state's own kind in the definition (agent, script, poll, timer, park, or terminal) drives what runs. When the selected state has inputSchema or template strings like {{ input.email }}, pass the matching input object here. Poll overrides must keep intervalMs set; timer overrides may replace wakeAt or wakeAfterMs (exactly one).
+      选择下一个状态机状态。所有选择字段都必须放在 \`decision\` 中，例如：{"decision":{"state":"work","override":{"kind":"agent","state":{"prompt":"更新后的任务","cwd":"/absolute/worktree"}}}}。顶层的 override/input/persistOverride 字段无效。\`decision.state\` 必须与活动定义中声明的某个状态名称完全匹配；该状态在定义中指定的 kind（agent、script、poll、timer、park 或 terminal）决定实际执行内容。所选状态定义了 inputSchema 或 {{ input.email }} 等模板时，在此传入匹配的 input 对象。poll 覆盖必须保留 intervalMs；timer 覆盖可替换 wakeAt 或 wakeAfterMs（二者只能选一）。
 
-      Carry forward what the orchestrator now knows. By default, agent states run in a fresh sub-agent context with no view of the previous state's transcript, tool output, or output value — they only see the rendered prompt and the input you pass here. So when a previous state surfaced facts the next state will need (file paths, IDs, error messages, decisions, summaries, root causes), either pass them as \`decision.input\` (when the state's inputSchema has matching fields) or use \`decision.override.state.prompt\` to inline the findings into the next state's prompt before running it. A static prompt that says "using the findings from the previous step" without inputs or an override is a bug: a fresh sub-agent has no way to read those findings, and neither your reasoning nor your reply text reaches it — this call's \`decision.input\`/\`decision.override.state.prompt\` is its only channel. Put the facts there on the FIRST select into a finding-dependent state; selecting it bare and adding context only after it comes back confused is the failure mode, not the fix. If restating the needed context would be lossy, set \`decision.override.state.forkContext: true\` on an agent state so it starts with a copy of the parent transcript; leave it off for self-contained work because it copies the full context.
+      将编排者现在掌握的信息传递下去。默认情况下，agent 状态会在全新的子 Agent 上下文中运行，无法查看前一状态的转录、工具输出或输出值——它只能看到渲染后的提示词和你在此传入的 input。因此，如果前一状态发现了下一状态需要的信息（文件路径、ID、错误消息、决策、摘要、根因），要么通过 \`decision.input\` 传递（前提是该状态的 inputSchema 有匹配字段），要么通过 \`decision.override.state.prompt\` 在运行下一状态前将发现写入其提示词。如果静态提示词仅写着“使用上一步的发现”，却没有提供输入或 override，就是错误做法：全新子 Agent 无法读取这些发现，你的推理和回复文本也不会传给它——此调用中的 \`decision.input\`/\`decision.override.state.prompt\` 是唯一传递渠道。首次进入依赖先前发现的状态时就传递事实；先裸选状态，等它回来困惑后再补上下文，不是解决办法。若重述所需上下文会造成信息丢失，可在 agent 状态设置 \`decision.override.state.forkContext: true\`，让它从父级转录副本开始；独立任务应保持关闭，因为这会复制完整上下文。
 
-      The working directory is part of that carry-forward, and the most common thing orchestrators get wrong. The moment a state operates anywhere other than the session cwd — a git worktree, clone, sub-package, or scratch directory whose path an earlier state returned — set \`decision.override.state.cwd\` (agent states) or the script/poll \`cwd\` to that path. Do this aggressively and by default for any out-of-tree work rather than waiting for the sub-agent to orient itself. Do NOT convey the location by writing "cd into /path" or "work in the worktree at /path" in the prompt: a sub-agent's coding tools (bash, read, write, edit) start in the \`cwd\` you set, not wherever the prompt mentions, so an inlined path leaves the tools pointed at the wrong tree while the narration reads correct. The path almost always comes from a previous state's output (e.g. a worktree path printed by an implement step) — capture it and pass it as \`decision.override.state.cwd\` on that transition. A relative cwd resolves against the session working directory shown in the \`<cwd>\` block of the system prompt, so prefer an absolute path for a worktree or clone that lives outside it.
+      工作目录也是上下文传递的一部分，也是编排者最常出错之处。只要状态在会话 cwd 之外执行——例如 git worktree、克隆目录、子包或由先前状态返回路径的临时目录——就设置 agent 状态的 \`decision.override.state.cwd\`，或 script/poll 的 \`cwd\`。任何树外工作都应默认且及时设置，不要等子 Agent 自行定位。不要仅在提示词中写“cd 到 /path”或“在 /path 的 worktree 中工作”来传递位置：子 Agent 的编程工具（bash、read、write、edit）会从所设的 \`cwd\` 启动，而不是从提示词提到的位置启动；因此虽然文字看起来正确，工具仍可能指向错误的工作树。该路径通常来自先前状态的输出（例如实现步骤打印的 worktree 路径）——请捕获它，并在该转换中传给 \`decision.override.state.cwd\`。相对 cwd 会相对于系统提示词 \`<cwd>\` 区块中显示的会话工作目录解析；worktree 或克隆目录位于其外部时优先使用绝对路径。
 
       Overrides persist by default. When you pass \`decision.override\`, the merged state (prompt, command, schedule — whichever fields you set) is written back into the active definition, so every future run of that state uses the tuned version. This is the right shape when you are tightening a sub-agent prompt that hallucinated, fixing a script command that misbehaved, or tuning poll/timer cadence. Set \`decision.persistOverride: false\` when you want a one-shot variation that does not commit — for example, probing a different prompt to see if the sub-agent recovers before deciding whether to keep the change. Terminal selections accept only \`decision.state\` and \`decision.reason\`; omit \`decision.override\`, \`decision.input\`, and \`decision.persistOverride\`. \`decision.override.kind\` must match the target state's kind; a mismatch is rejected outright (rather than silently dropping the override), and a per-state \`cwd\` that does not resolve to an existing directory is rejected too — fix the kind or the path before re-selecting.
 
@@ -1359,8 +1331,8 @@ function assertValidSelectedState(
 
   const selectedState = requireDefinedState(definition, decision.state);
 
-  // A minimal terminal selection always escapes a broken state's inputs/cwd.
-  // Extra control fields must not look accepted when no work will consume them.
+  // 一个最小的终态选择总能避开损坏状态的 input/cwd。
+  // 没有工作会消费额外控制字段时，不能让它们看起来像已被接受。
   if (selectedState.kind === "terminal") {
     if (
       decision.override !== undefined ||
@@ -1383,7 +1355,7 @@ function validatedStateOverride(
   override: StateMachineStateOverride | undefined,
   baseCwd: string,
 ): StateMachineState {
-  // applyStateOverride ignores kind mismatches, so reject rather than report an edit it dropped.
+  // applyStateOverride 会忽略 kind 不匹配的 override，因此拒绝它，而不是报告一个已被丢弃的编辑。
   if (override && override.kind !== selectedState.kind) {
     throw new Error(
       `Override kind "${override.kind}" does not match state "${selectedState.name}", which is a "${selectedState.kind}" state. Set the override kind to "${selectedState.kind}" so the override is applied instead of silently dropped.`,
@@ -1396,33 +1368,27 @@ function validatedStateOverride(
   return effectiveState;
 }
 
-// Appended to the "cwd does not exist" error depending on where validation
-// runs. At selection time the directory should already exist (an earlier
-// state had a chance to create it). At creation time it often does not exist
-// yet, so the right move is usually to omit cwd now and set it via
-// decision.override.state.cwd on select_state_machine_state once the directory is created.
+// 根据校验执行的位置，将其追加到“cwd 不存在”错误中。选择状态时目录应已存在
+//（前一状态有机会创建它）；创建状态时目录通常还不存在，因此一般应省略 cwd，
+// 等目录创建后再通过 select_state_machine_state 的 `decision.override.state.cwd` 设置。
 const SELECT_CWD_GUIDANCE =
   "Set the overridden state's cwd to a directory that exists — typically the worktree or clone an earlier state created.";
 const CREATE_CWD_GUIDANCE =
   "If an earlier state creates this directory at runtime, omit cwd here and set it via decision.override.state.cwd on select_state_machine_state once the directory exists. Otherwise point it at a directory that already exists.";
 
-// Resolve a per-state `cwd` (from a state definition or an override) against
-// the runner's base cwd. A relative path resolves against `baseCwd` — the
-// runner's config.cwd, set by --workDir, falling back to process.cwd() — so it
-// lands in the directory the `<cwd>` system-prompt block advertises rather than
-// the launching process's cwd, which Node would otherwise use. Used by both the
-// runtime (agent/script/poll execution) and the select/create validators so a
-// cwd is resolved identically wherever it is checked or run. `undefined`
-// (no per-state cwd) falls back to the base.
+// 将每个状态的 `cwd`（来自定义或 override）相对于 runner 的基础 cwd 解析。相对路径相对于
+// `baseCwd` 解析——即由 --workDir 设置的 runner config.cwd，回退到 process.cwd()——
+// 因此会落在 `<cwd>` system-prompt 区块公布的目录，而不是 Node 默认使用的启动进程 cwd。
+// runtime（agent/script/poll 执行）和 select/create 校验都使用此函数，确保任何检查或运行
+// 都得到相同的 cwd。没有每状态 cwd 时，`undefined` 回退到基础目录。
 export function resolveStateCwd(cwd: string | undefined, baseCwd: string): string {
   if (cwd === undefined) return resolve(baseCwd);
   return isAbsolute(cwd) ? cwd : resolve(baseCwd, cwd);
 }
 
-// A per-state `cwd` (from the definition or an override) becomes the working
-// directory the sub-agent's coding tools start in. A path that does not exist
-// or is not a directory lands the sub-agent in a broken/empty tree where it
-// finds none of the files it was told to work on and reports "nothing to do".
+// 每个状态的 `cwd`（来自定义或 override）会成为子 Agent 编程工具启动时使用的工作目录。
+// 不存在或不是目录的路径会让子 Agent 进入损坏/空白的树，在那里找不到要求处理的文件，
+// 并报告“无事可做”。
 function assertValidStateCwd(state: StateMachineState, baseCwd: string, guidance: string): void {
   const cwd =
     state.kind === "agent" || state.kind === "script" || state.kind === "poll"
@@ -1459,10 +1425,8 @@ function assertValidStateInput(state: StateMachineState, input: unknown): void {
   throw new Error(`Invalid input for state "${state.name}" at ${path}: ${message}`);
 }
 
-// Minimum poll/timer cadence. State machines are for long-running lifecycle
-// work that survives sleeps, wakes, and background execution; anything shorter
-// than this should be performed directly in the parent turn rather than paid
-// for with the orchestration overhead of a state machine.
+// poll/timer 的最小 cadence。状态机用于能跨 sleep、wake 和后台执行持续的长生命周期工作；
+// 短于此值的工作应直接在 parent turn 中完成，而不是承担状态机编排开销。
 export const MINIMUM_STATE_MACHINE_DELAY_MS = 30_000;
 
 function assertValidDefinition(
@@ -1483,9 +1447,8 @@ function assertValidDefinition(
   assertHasCompletedTerminal(definition);
 }
 
-// The author defines the happy-path exit; failed/cancelled escape hatches are
-// added automatically so every definition can always be aborted or finalized
-// without forcing the caller to remember boilerplate terminal states.
+// 作者定义成功路径的出口；自动添加 failed/cancelled 逃生出口，使每个 definition
+// 都能被中止或完成，而不要求调用方记住样板终态。
 function injectMissingTerminalEscapeHatches(definition: StateMachineDefinition): void {
   const existingNames = new Set(definition.states.map((state) => state.name));
   if (!existingNames.has("failed")) {
@@ -1518,10 +1481,9 @@ function assertValidStateInputSchema(state: StateMachineState): void {
   throw new Error(`Invalid inputSchema for state "${state.name}": ${message}`);
 }
 
-// Shape validation: intervalMs / wakeAt must be present and parseable. Runs at
-// both definition creation and state selection so malformed overrides are
-// rejected too. Duration strings like "3h" / "5d" are accepted alongside raw
-// millisecond numbers; ISO 8601 strings are accepted for absolute wakeAt.
+// 形状校验：intervalMs / wakeAt 必须存在且可解析。在 definition 创建和状态选择时都运行，
+// 因此 malformed override 也会被拒绝。除原始毫秒数外，还接受 "3h" / "5d" 等时长字符串；
+// 绝对 wakeAt 接受 ISO 8601 字符串。
 function assertValidStateSchedule(state: StateMachineState): void {
   if (state.kind === "poll") {
     parseDurationToMs(
@@ -1548,10 +1510,9 @@ function assertValidStateSchedule(state: StateMachineState): void {
   }
 }
 
-// Minimum-cadence guidance: enforced only when a new definition is being
-// created. Existing definitions handed to the runner via `mode:` may legitimately
-// have shorter cadences from configuration the agent did not author, and the
-// runtime should run them as-is rather than re-litigating the boundary.
+// 最小 cadence 指导：仅在创建新 definition 时强制。通过 `mode:` 交给 runner 的现有 definition
+// 可能来自 Agent 未编写的配置，合法地使用更短 cadence；runtime 应按原样运行，而不是重新
+// 争论这个边界。
 function assertValidStateScheduleMinimum(
   state: StateMachineState,
   input: { clock: RuntimeClock; minimumScheduledDelayMs: number },

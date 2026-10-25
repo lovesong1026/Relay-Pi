@@ -1,21 +1,20 @@
 #!/usr/bin/env bun
 
 /**
- * Relay Pi (`relay-pi`) CLI executable entry point.
+ * Relay Pi（`relay-pi`）CLI 可执行文件入口。
  *
- * This file stays deliberately thin: the published `relay-pi` bin resolves here so
- * that `relay-pi -v` / `relay-pi --version` on the default run command can print the
- * version without paying the ~0.3s cost of evaluating the full run/session/TUI
- * import graph that `./cli.js` pulls in statically. Every other invocation
- * defers to `runCli`, which owns the real subcommand dispatch.
+ * 此文件有意保持精简：发布后的 `relay-pi` bin 在这里解析，因此默认运行命令中的
+ * `relay-pi -v` / `relay-pi --version` 可以直接打印版本，而不必承担求值完整的
+ * run/session/TUI 导入图约 ~0.3 秒的成本；该导入图由 `./cli.js` 静态拉取。其他调用
+ * 都交给拥有真正子命令分发逻辑的 `runCli`。
  */
 
 import packageJson from "../package.json" with { type: "json" };
 
 const args = process.argv.slice(2);
 
-// A leading `-v`/`--version` is the version invocation; named subcommands and
-// `--rpc` own their own flag parsing, so only the first token short-circuits.
+// 以 `-v`/`--version` 开头的是版本调用；命名子命令和 `--rpc` 各自拥有参数解析，
+// 因此只有第一个 token 会触发短路。
 if (args[0] === "-v" || args[0] === "--version") {
   console.log(packageJson.version);
 } else {

@@ -1,8 +1,8 @@
 /**
- * Relay Pi — An opinionated full-stack agent runner.
+ * Relay Pi——一套有明确设计取向的全栈 Agent runner。
  *
- * Native memories. Native interrupts. Multi-agent by default.
- * No MCP — everything is files and CLI.
+ * 原生记忆。原生中断。默认支持多 Agent。
+ * 不依赖 MCP——一切都是文件和 CLI。
  */
 
 export * from "./types/memory.js";

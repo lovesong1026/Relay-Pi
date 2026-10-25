@@ -1,16 +1,15 @@
 #!/usr/bin/env bun
 
 /**
- * Relay Pi (`relay-pi`) CLI entry point.
+ * Relay Pi（`relay-pi`）CLI 入口。
  *
- * Usage:
+ * 用法：
  *   relay-pi "build a todo app in React"
  *   relay-pi --model opus-5.5 "refactor auth system"
  *   echo "fix the bug in server.ts" | relay-pi
  *
- * The actual command implementations live under `src/cli/`. This file is the
- * subcommand dispatcher and the public re-export surface for tests and
- * callers that historically imported helpers from `src/cli.ts`.
+ * 真正的命令实现位于 `src/cli/` 下。本文件负责子命令分发，并作为测试和调用方的
+ * 公开重新导出层，兼容过去从 `src/cli.ts` 导入辅助函数的代码。
  */
 
 import { basename } from "node:path";
@@ -28,9 +27,9 @@ import { runTrainCommand } from "./cli/train.js";
 import { runUpgradeCommand } from "./cli/upgrade.js";
 import { loadConnectedTransportSnapshot } from "./cli/shared.js";
 
-// ---- public re-exports ----------------------------------------------------
-// External tests and callers historically import these helpers from
-// `src/cli.ts`. The implementations now live alongside their commands.
+// ---- 公开重新导出 ----------------------------------------------------
+// 外部测试和调用方过去一直从 `src/cli.ts` 导入这些辅助函数；现在实现已
+// 与各自的命令放在同一个目录下。
 
 export type { CliTurnConfigInput, CliTurnConfigResolution, PackageMetadata } from "./cli/run.js";
 export { buildCliTurnConfig, runRunCommand, shouldUseTui } from "./cli/run.js";
@@ -111,9 +110,8 @@ export async function runCli(): Promise<void> {
       return;
     }
 
-    // `--rpc` is a top-level routing flag rather than a subcommand because it
-    // shares all model/workdir/env flags with the default run command; the
-    // difference is only the I/O surface (stdin commands, stdout events).
+    // `--rpc` 是顶层路由 flag 而不是子命令，因为它与默认运行命令共享所有 model/workdir/env
+    // flag；区别只有 I/O 表面（stdin commands、stdout events）。
     if (args.includes("--rpc")) {
       await runRpcCommand(args, PACKAGE_METADATA);
       return;
@@ -126,15 +124,15 @@ export async function runCli(): Promise<void> {
   }
 }
 
-/** True only when the dispatcher file itself, rather than cli-entry or a test, was invoked. */
+/** 仅当直接调用 dispatcher 文件本身，而不是 cli-entry 或测试时才为 true。 */
 export function isDirectCliInvocation(moduleUrl: string, invokedPath: string | undefined): boolean {
   if (!invokedPath) return false;
   const moduleName = basename(fileURLToPath(moduleUrl));
   return ["cli.ts", "cli.js"].includes(moduleName) && basename(invokedPath) === moduleName;
 }
 
-// Bun's single-file compiler gives dynamically imported modules the executable's
-// URL. The explicit filename check keeps cli-entry as the sole compiled owner.
+// Bun 的单文件编译器会为动态导入的模块提供可执行文件的 URL。显式文件名检查确保
+// cli-entry 是唯一的编译归属者。
 if (isDirectCliInvocation(import.meta.url, process.argv[1])) {
   void runCli();
 }

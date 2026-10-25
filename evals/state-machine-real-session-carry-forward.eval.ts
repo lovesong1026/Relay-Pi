@@ -12,24 +12,20 @@ import { testIfDocker } from "../test/helpers/docker-only.js";
 const model = process.env.EVAL_MODEL ?? "sonnet-5";
 
 /**
- * Replay of session `c_cGfNEIotLU` ("Investigate corrupted memory DBs") with
- * the original user prompt, definition name, state names, and the literal
- * third-state prompt. The first two agent states are replaced with script
- * states that print the verbatim outputs the real sub-agents produced (stored
- * under `evals/fixtures/session-c_cGfNEIotLU/`), so the parent receives the
- * exact compact results the real orchestrator did.
+ * 重放 session `c_cGfNEIotLU`（“调查损坏的记忆数据库”），保留原始用户提示词、
+ * definition name、state names 和第三个状态的字面 prompt。前两个 agent 状态替换为
+ * script 状态，打印真实子 Agent 产生的原样输出（保存在
+ * `evals/fixtures/session-c_cGfNEIotLU/` 下），因此父 Agent 会收到真实编排器所见的
+ * 完全相同的紧凑结果。
  *
- * The original orchestrator transitioned to `fix_and_recover` without
- * amending the static prompt that vaguely referenced "the findings from the
- * survey" / "the corrupted DBs found earlier". The fresh sub-agent could not
- * see those findings and asked the user three clarifying questions — the
- * observable form of the carry-forward bug. The user then re-ran the state
- * with a long `override.prompt` inlining the survey + diagnose findings.
+ * 原始编排器在没有修改静态 prompt 的情况下转移到 `fix_and_recover`；静态 prompt
+ * 只模糊提到“调查结果”/“之前发现的损坏 DB”。新子 Agent 看不到这些发现，于是
+ * 提出了三个澄清问题——这就是 carry-forward bug 的可观察表现。用户随后用很长的
+ * `override.prompt` 重新运行状态，将调查和诊断结果内联进去。
  *
- * This eval asserts the fixed flow: at transition time, the parent must
- * inline concrete findings (PGlite, the embedding-worker FK race, the
- * specific repo paths, the open-race root cause) via `override.prompt` or
- * `input`, so the third sub-agent can act without re-asking the user.
+ * 此 eval 断言修复后的流程：在转换时，父 Agent 必须通过 `override.prompt` 或 `input`
+ * 内联具体发现（PGlite、embedding-worker 外键竞争、具体仓库路径、打开竞争根因），
+ * 使第三个子 Agent 无需再次询问用户就能行动。
  */
 describe("state machine real session c_cGfNEIotLU carry-forward", () => {
   testIfDocker(
@@ -41,12 +37,10 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
         const definition: StateMachineDefinition = {
           name: "Investigate corrupted memory DBs",
           prompt:
-            "Find the root cause of corrupted memory databases under ~/.relay-pi, reproduce the failure mode, determine whether embeddings are involved, fix the source issue, and attempt to recover data from existing corrupted DBs.",
+            "找出 ~/.relay-pi 下记忆数据库损坏的根本原因，复现故障模式，判断是否与 embeddings 有关，修复源头问题，并尝试从现有损坏数据库中恢复数据。",
           states: [
-            // The original first two states were agent states; replacing them
-            // with script states that print the recorded verbatim outputs
-            // keeps the eval cheap and deterministic while preserving the
-            // exact compact result the original orchestrator saw.
+            // 原始的前两个状态是 agent 状态；将它们替换为打印记录原样输出的 script 状态，
+            // 可以让 eval 保持低成本且确定性，同时保留原始编排器看到的完全相同的紧凑结果。
             {
               kind: "script",
               name: "survey_corruption",
@@ -63,13 +57,11 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
               kind: "agent",
               name: "fix_and_recover",
               cwd: recoverDir,
-              // Verbatim prompt from the original session. The static phrases
-              // "Fix the root cause" and "corrupted DBs found earlier" have
-              // no concrete antecedent inside a fresh sub-agent context —
-              // the parent must carry the survey + diagnose findings forward
-              // via override.prompt or input when selecting this state.
-              prompt:
-                "Fix the root cause in the repo (smallest correct change, follow AGENTS.md: no thin wrappers, keep names current, run typecheck + lint + relevant tests; file-writing tests via docker). Then write a recovery script that opens each corrupted DB read-only, dumps recoverable rows (try `.recover` and `.dump`, and row-by-row SELECT with error skipping), and reinserts them into a fresh DB at the same path (after backing the corrupted file aside to `<path>.corrupt-<timestamp>`). Run the recovery against the actual corrupted DBs found earlier and report rows recovered vs rows lost per DB. Return: commit-ready summary of the fix, verification output (typecheck/lint/tests), and recovery stats.",
+              // 来自原始 session 的原样 prompt。静态短语“修复根本原因”和“之前发现的损坏 DB”
+              // 在全新的子 Agent 上下文中没有具体指代——父 Agent 必须在选择该状态时，
+              // 通过 override.prompt 或 input 向前传递调查和诊断结果。
+                prompt:
+                "在仓库中修复根本原因（采用最小且正确的改动，遵循 AGENTS.md：不要添加薄封装，保持名称与当前设计一致，运行类型检查、lint 和相关测试；会写文件的测试必须通过 docker 运行）。然后编写恢复脚本，以只读方式打开每个损坏的数据库，导出可恢复的行（尝试 `.recover`、`.dump`，以及逐行 SELECT 并跳过错误），再将数据重新插入同一路径上的全新数据库（先将损坏文件备份为 `<path>.corrupt-<timestamp>`）。针对前面发现的实际损坏数据库运行恢复脚本，并分别报告每个数据库恢复和丢失的行数。返回：可用于提交的修复摘要、验证输出（类型检查/lint/测试）以及恢复统计。",
               // Bound the sub-agent for eval cost. The carry-forward decision
               // we are measuring happens at transition time, before this
               // sub-agent runs; this systemPrompt only keeps the actual run
@@ -78,23 +70,12 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
               // strongly encourages tool use, and a single "do not call
               // tools" line otherwise loses to the tool-use prior.
               systemPrompt: dedent`
-                ABSOLUTE CONSTRAINTS — THIS IS AN EVAL SANDBOX:
-                - Do NOT call ANY tools. Not bash, not read, not edit, not
-                  write, not grep, not git, not the test runner, not
-                  todo_write, not anything. Zero tool calls is the only
-                  acceptable behavior.
-                - Do NOT modify or create any files.
-                - Do NOT ask the user questions — if the prompt is missing
-                  context, that is itself a failure of the parent
-                  orchestrator that we are measuring.
-                - Your sole job is to reply with ONE short paragraph (no
-                  more than 6 sentences) that names the concrete root
-                  cause you would fix and the concrete repo file(s) you
-                  would touch, based ONLY on what is in your rendered
-                  prompt above this block. Then stop.
-                - If you find yourself wanting to verify something with a
-                  tool, do not. State your best-evidence answer from the
-                  prompt text and stop.
+                绝对约束——这是一个 eval 沙箱：
+                - 不得调用任何工具，包括 bash、read、edit、write、grep、git、测试运行器、todo_write 等。唯一可接受的行为是零次工具调用。
+                - 不得修改或创建任何文件。
+                - 不得向用户提问——如果提示缺少上下文，这本身就是本次要测量的父级编排器缺陷。
+                - 你唯一的工作是回复一段简短文字（不超过 6 句），仅根据上方渲染后的提示词，指出你会修复的具体根因和会修改的具体仓库文件。然后停止。
+                - 如果你想用工具验证任何内容，不要这样做。请根据提示文本给出证据最充分的回答，然后停止。
               `,
             },
             { kind: "terminal", name: "done", status: "completed" },
@@ -107,16 +88,13 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
           model,
           mode: definition,
           skillDiscovery: { includeDefaults: false },
-          // Deliberately minimal: no instructions about carrying findings
-          // forward. The only signal is the default state-machine prompt
-          // layer and the select_state_machine_state tool description, which
-          // is what this eval validates.
+          // 有意保持最小配置：不提供关于向前传递发现的说明。唯一信号来自默认状态机 prompt
+          // 层和 select_state_machine_state 工具描述，这正是本 eval 要验证的内容。
           systemInstructions: dedent`
-            This is a live eval replay of a real session. Use the
-            state-machine tools for every transition. Select
-            survey_corruption first, then reproduce_and_diagnose, then
-            fix_and_recover, then done. Do not invent extra states and do
-            not ask the user any questions yourself.
+            这是对真实会话的 live eval 重放。每次状态转换都使用
+            state-machine 工具。先选择 survey_corruption，然后选择
+            reproduce_and_diagnose，再选择 fix_and_recover，最后选择 done。
+            不要创建额外状态，也不要自行向用户提问。
           `,
         });
 
@@ -129,9 +107,8 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
           selectCalls.push({ input: step.input });
         });
 
-        // The exact verbatim user prompt from session_c_cGfNEIotLU. The
-        // <system-reminder> "relay mode" wrapper is preserved because it is
-        // part of the recorded turn that produced the failure mode.
+        // 来自 session_c_cGfNEIotLU 的完全相同的用户 prompt。保留 <system-reminder> 中的
+        // “relay mode” 包装，因为它是产生该失败模式的已记录 turn 的一部分。
         const userPrompt = dedent`
           figure out where your corrupted memory dbs under ~/.relay-pi is coming from, try to reproduce the error. is it because of embeddings? if you find the issue, fix it, and try to recover the memories from the corrupted dbs
 
@@ -148,8 +125,7 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
 
         expect(terminal.type).toBe("complete");
 
-        // Locate the transition into fix_and_recover and confirm it inlined
-        // concrete findings the fresh sub-agent could not otherwise see.
+        // 找到进入 fix_and_recover 的转换，并确认其中内联了新子 Agent 原本无法看到的具体发现。
         const fixSelect = selectCalls.find((call) => {
           const decision = (call.input as { decision?: { state?: string } } | undefined)?.decision;
           return decision?.state === "fix_and_recover";
@@ -167,24 +143,18 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
         const inputValues = JSON.stringify(decision?.input ?? {});
         const carried = `${overridePrompt}\n${inputValues}`.toLowerCase();
 
-        // The parent must inline at least one repo-specific file path from
-        // the survey output. "Findings from the previous step" with no
-        // carry-forward leaves the sub-agent blind to where to apply the
-        // fix.
+        // 父 Agent 必须内联调查输出中的至少一个仓库特定文件路径。“上一步的发现”如果没有
+        // 实际向前传递，会让子 Agent 不知道应在哪里应用修复。
         expect(carried).toContain("pglite");
         expect(carried).toMatch(/src\/memory\/pglite\.ts/);
 
-        // The diagnose output identified a process-level open race as the
-        // root cause. That fact only exists in the previous state's output
-        // and must reach the third sub-agent.
+        // 诊断输出指出进程级 open race 是根因。这个事实只存在于前一状态的输出中，
+        // 必须传递给第三个子 Agent。
         expect(carried).toMatch(/race|concurrent|postmaster|open|migration/);
 
-        // Structural check on the recorded state history: the third state
-        // actually ran (not skipped or failed before execution). The primary
-        // assertion above already proved the carry-forward landed in the
-        // select call's input or override; we do not also gate on the
-        // bounded sub-agent's free-form reply, which is too noisy for an
-        // eval signal.
+        // 对记录的状态历史做结构检查：第三个状态确实运行了（而不是在执行前被跳过或失败）。
+        // 上面的主要断言已经证明 carry-forward 到达了 select 调用的 input 或 override；
+        // 不再用受限子 Agent 的自由文本回复作为额外门槛，因为它对 eval 信号来说噪声太大。
         const history = terminal.state.stateMachine?.history ?? [];
         const fixOutput = history.find(
           (event) => event.type === "state_completed" && event.state === "fix_and_recover",

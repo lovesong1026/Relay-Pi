@@ -10,155 +10,125 @@ import type { ObservationalMemoryActivityEvent } from "./memory.js";
 import type { StateMachineDefinition, StateMachineSession } from "./state-machine.js";
 
 /**
- * TurnRunner Protocol
+ * TurnRunner 协议。
  *
- * A JSON-friendly command/event protocol for operating Relay Pi turn runners.
- * The transport is intentionally unspecified. A CLI, daemon, HTTP server, or
- * parent process can all speak this protocol as long as they can send commands
- * and consume streamed events.
+ * 用于操作 Relay Pi turn runner 的 JSON 友好 command/event 协议。
+ * 传输方式有意不作规定：只要能够发送 command 并消费流式 event，CLI、daemon、HTTP server
+ * 或父进程都可以使用此协议。
  *
- * The protocol is not a comm layer. It is the control surface for the
- * runner itself:
+ * 协议不是通信层，而是 runner 自身的控制面：
  *
- * - commands tell the runner what to do
- * - turn events report work during the turn and end each turn
+ * - command 告诉 runner 要做什么；
+ * - turn event 报告 turn 期间的工作，并结束每个 turn。
  *
- * ## Turn Model
+ * ## Turn 模型
  *
- * The runner is a stateful turn executor: `start` bootstraps the current
- * `TurnState`, and each terminal event returns the next snapshot. The session
- * is the persistence owner. It assigns session ids, hydrates stored snapshots
- * before start, persists terminal snapshots, schedules wakeups, and can run an
- * unbounded number of turn-runner turns for the same user session.
+ * runner 是有状态的 turn executor：`start` 引导当前 `TurnState`，每个终态 event 返回下一
+ * 个 snapshot。Session 是持久化所有者：分配 session id，在 start 前 hydrate 已保存的 snapshot，
+ * 持久化终态 snapshot，安排 wakeup，并可为同一个用户 Session 运行无界数量的 turn。
  *
- * A caller initializes a session by sending `start`. This is a setup command,
- * not a turn: the runner loads memory and skills, emits `turn_started`
- * with the initial empty `TurnState`, and returns. Skills, agent files, and
- * skill collisions are exposed through `getSkills()`, `getResolvedAgentFiles()`,
- * and `getSkillCollisions()` for callers (CLI/TUI) that want to render a
- * setup summary; no agent work runs until the caller sends a follow-up.
+ * 调用方通过发送 `start` 初始化 Session。这是 setup command，不是 turn：runner 加载 memory
+ * 和 skills，发送包含初始空 `TurnState` 的 `turn_started` 后返回。调用方可以通过
+ * `getSkills()`、`getResolvedAgentFiles()` 和 `getSkillCollisions()` 取得 skills、Agent 文件及
+ * skill 冲突，并渲染 setup 摘要；在调用方发送后续 command 前，不会执行 Agent 工作。
  *
- * Once the session is set up, callers run turns by sending one of:
+ * Session 建立后，调用方可以发送以下 command 运行 turn：
  *
- * - `prompt`: send a user prompt against the current state
- * - `answer`: answer questions from the previous terminal `ask` event
- * - `wake`: resume a sleeping session for one scheduled state-machine step
+ * - `prompt`：针对当前状态发送用户 prompt；
+ * - `answer`：回答上一次终态 `ask` event 提出的问题；
+ * - `wake`：为一次计划中的状态机步骤恢复睡眠 Session。
  *
- * Each turn emits any number of during-turn events, including task lifecycle,
- * agent steps, state snapshots, and diagnostics. The turn ends with exactly one
- * terminal event:
- * `complete`, `ask`, `interrupted`, or `sleep`.
- * Terminal events carry the turn runner-owned state needed to continue a later turn.
- * `complete` means this turn-runner turn ended; it does not mean the session
- * session is finished. A user can follow up with another prompt for the same
- * session; the runner continues from its internally held `TurnState`. The
- * agent session is always present because the agent owns the conversation
- * history and, for state-machine mode, drives state transitions.
+ * 每个 turn 可以发送任意数量的进行中 event，包括 task 生命周期、Agent 步骤、状态 snapshot
+ * 和诊断信息。每个 turn 恰好以一个终态 event 结束：`complete`、`ask`、`interrupted` 或
+ * `sleep`。终态 event 携带 turn runner 拥有的、继续后续 turn 所需的状态。
+ * `complete` 表示本次 turn runner turn 结束，不表示整个 Session 结束。用户可以继续为同一
+ * Session 发送 prompt；runner 会从内部持有的 `TurnState` 继续。Agent Session 始终存在，
+ * 因为 Agent 持有对话历史，并在状态机模式下驱动状态转换。
  *
- * ## Scenario 1: One-Shot Agent Task
+ * ## 场景 1：一次性 Agent 任务
  *
- * The user asks for a normal task, such as "summarize this file" or "fix this
- * bug." The caller sends `start` (omitting `mode` or setting `mode: "auto"`)
- * to set the session up; the runner emits `turn_started` with an empty
- * `state.agent`. When the user types their first prompt, the caller sends a
- * `prompt` command and the runner classifies it as agent mode and emits:
+ * 用户请求普通任务，例如“总结这个文件”或“修复这个 bug”。调用方发送 `start`（省略
+ * `mode` 或设置 `mode: "auto"`）建立 Session；runner 发送带空 `state.agent` 的
+ * `turn_started`。用户输入第一个 prompt 后，调用方发送 `prompt` command，runner 将其
+ * 分类为 Agent 模式并发送：
  *
- * 1. zero or more `step`, `todos`, `follow_up_queue`, or `log` events
- * 2. `complete` with the final answer and updated `state.agent`
+ * 1. 零个或多个 `step`、`todos`、`follow_up_queue` 或 `log` event；
+ * 2. 携带最终答案和更新后 `state.agent` 的 `complete`。
  *
- * This behaves like a normal agent runner. There is no state-machine UI because
- * the session is not a long-running business process.
+ * 这与普通 Agent runner 一样工作。由于 Session 不是长生命周期业务流程，不会出现状态机 UI。
  *
- * ## Scenario 2: Auto-Selected State Machine
+ * ## 场景 2：自动选择的状态机
  *
- * The user asks for a task with a complex lifecycle, such as "prospect this
- * customer until they book a meeting" or "implement this change, open a PR, and
- * watch it until merge." With `mode: "auto"`, the first `prompt` after `start`
- * routes through the runner, which chooses a state machine and populates
- * `state.stateMachine` on the next emitted state.
+ * 用户请求具有复杂生命周期的任务，例如“持续跟进客户直到客户预约会议”，或“实现此改动、
+ * 创建 PR 并持续观察直到合并”。使用 `mode: "auto"` 时，`start` 后的第一个 `prompt`
+ * 会经过 runner 路由；runner 选择一个状态机，并在下一次发送的 state 中填充
+ * `state.stateMachine`。
  *
- * During the turn, the runner emits events that the UI can render directly:
+ * turn 期间，runner 会发送 UI 可以直接渲染的 event：
  *
- * - `state_machine` carries the full state-machine session snapshot
- * - `step` shows textual progress, reasoning, tool calls, or system messages
- * - `todos` shows current task progress
- * - `follow_up_queue` shows prompts waiting for the current turn chain to finish
- * - `task_started`, `task_output`, and `task_settled` expose task lifecycle changes
- * - `log` shows diagnostic messages
+ * - `state_machine` 携带完整的状态机 Session snapshot；
+ * - `step` 展示文本进度、推理、工具调用或系统消息；
+ * - `todos` 展示当前任务进度；
+ * - `follow_up_queue` 展示等待当前 turn chain 完成的 prompt；
+ * - `task_started`、`task_output` 和 `task_settled` 暴露 task 生命周期变化；
+ * - `log` 展示诊断消息。
  *
- * The UI can always render `state.agent` as the conversation transcript. When it
- * also sees `state.stateMachine`, it can render a Kanban board for the state
- * machine. Each `state_machine` event moves the visible session card to the
- * current state column and updates the lifecycle status.
+ * UI 始终可以把 `state.agent` 渲染为对话 transcript。若同时看到 `state.stateMachine`，
+ * 还可以渲染状态机的 Kanban board。每个 `state_machine` event 会将可见的 Session 卡片
+ * 移到当前状态列，并更新生命周期状态。
  *
- * ### Scenario 2a: User Follow-Up Interrupts The Turn
+ * ### 场景 2a：用户 follow-up 中断 turn
  *
- * While the state machine is running, the user can send a `prompt` command with
- * `behavior: "steer"`. The runner should treat this as additional user
- * context for the active pi session. For example, the user might say "I've
- * already received this email" while the state machine is waiting for a reply.
- * The runner agent can incorporate that message, update the state-machine
- * state, and then continue the same state-machine session instead of abandoning it.
+ * 状态机运行期间，用户可以发送带 `behavior: "steer"` 的 `prompt` command。runner 应将
+ * 它视为活动 pi Session 的额外用户上下文。例如，状态机等待回复时，用户可能说“我已经
+ * 收到这封邮件”。runner Agent 可以吸收该消息，更新状态机状态，然后继续同一个状态机
+ * Session，而不是放弃它。
  *
- * A typical stream is:
+ * 典型的流是：
  *
- * 1. `step` events while the agent incorporates the user's update
- * 2. more `state_machine` events as the updated state machine continues
- * 3. a terminal event (`complete`, `ask`, `sleep`, or `interrupted`) carrying
- *    the updated `state`
+ * 1. Agent 吸收用户更新时发送 `step` event；
+ * 2. 更新后的状态机继续运行时发送更多 `state_machine` event；
+ * 3. 携带更新后 `state` 的终态 event（`complete`、`ask`、`sleep` 或 `interrupted`）。
  *
- * ### Scenario 2b: Scheduled States Use Sleep
+ * ### 场景 2b：计划状态使用 sleep
  *
- * A state machine might send an email and then wait for a reply, or pause until
- * a specific timestamp. Recurring external checks should be modeled as poll
- * states, not as user-owned infinite polling scripts. Absolute waits should be
- * modeled as timer states. When scheduled work needs to wait, the runner emits
- * a terminal `sleep` event with `wakeAt`.
+ * 状态机可能发送邮件后等待回复，或暂停到指定时间。重复的外部检查应建模为 poll 状态，
+ * 而不是由用户拥有的无限 polling script。绝对等待应建模为 timer 状态。计划工作需要等待
+ * 时，runner 会发送带 `wakeAt` 的终态 `sleep` event。
  *
- * The layer above the runner persists the state, schedules a wakeup for `wakeAt`,
- * and starts the runner again at that time. On each wake, the runner performs
- * the scheduled poll attempt or completes the timer state. Once scheduled work
- * finishes, the runner records it in the state-machine session and continues to
- * the next state.
+ * runner 之上的层持久化状态，安排在 `wakeAt` 唤醒，并在该时间再次启动 runner。每次 wake
+ * 时，runner 执行一次计划的 poll 尝试，或完成 timer 状态。计划工作结束后，runner 将结果
+ * 记录到状态机 Session，并继续下一个状态。
  *
- * If the user sends a prompt while the session is sleeping on a
- * scheduled state, the session cancels the pending wake, runs that prompt
- * as a normal turn-runner turn, and returns the session to `sleep` if the state
- * machine is still waiting. The user should not see a stable `complete` state
- * while the business process is actually waiting on something external.
+ * 如果 Session 在计划状态上睡眠时用户发送 prompt，Session 会取消待处理 wake，将该 prompt
+ * 作为普通 turn runner turn 运行；如果状态机仍在等待，则 Session 回到 `sleep`。当业务流程
+ * 实际正在等待外部事件时，用户不应看到稳定的 `complete` 状态。
  *
- * ### Scenario 2c: Interrupting State-Machine Work
+ * ### 场景 2c：中断状态机工作
  *
- * An interrupt stops active turn-runner work for the current turn. If a state-machine
- * session is active, interruption also records an interrupted state-machine
- * terminal marker. Scheduled wakeups are owned by the session and are cancelled
- * there. A later user prompt starts a new turn from the interrupted state; the
- * parent agent can choose the right continuation.
+ * interrupt 会停止当前 turn 的活动 turn-runner 工作。如果状态机 Session 活动着，中断还会
+ * 记录一个 interrupted 状态机终态标记。计划的 wakeup 由 Session 持有，并在那里取消。之后
+ * 用户发送 prompt 时，会从 interrupted 状态开始新的 turn；父 Agent 可以选择正确的继续路径。
  *
- * ## Scenario 3: Explicit State Machine Definition
+ * ## 场景 3：显式状态机定义
  *
- * A caller can pass a full `StateMachineDefinition` as `mode`. The definition
- * is a set of possible states the runner may use, not a command to force every
- * prompt into that state machine.
+ * 调用方可以将完整的 `StateMachineDefinition` 作为 `mode` 传入。定义是一组 runner 可以
+ * 使用的候选状态，不是强制每个 prompt 都进入该状态机的命令。
  *
- * If the user's prompt matches the definition, the runner runs that state
- * machine directly and emits the same state-machine events as Scenario 2.
+ * 如果用户 prompt 匹配定义，runner 会直接运行该状态机，并发送与场景 2 相同的状态机 event。
  *
- * If the user's prompt does not fit the provided definition, the runner should
- * answer normally in agent mode. Conceptually, the selected state can be
- * `undefined`: none of the possible states fit the user's request.
+ * 如果用户 prompt 不适合提供的定义，runner 应在 Agent 模式下正常回答。从概念上说，此时
+ * 选中的状态可以是 `undefined`：没有任何候选状态符合用户请求。
  */
 
 /**
- * Top-level execution mode for a prompt.
+ * prompt 的顶层执行模式。
  *
- * - "agent": handle the prompt as a normal one-shot/current-session agent session.
- * - "auto": let the runner classify which mode the prompt needs. Auto sessions
- *   may create new state-machine definitions over time, even after a previous
- *   state machine reached a terminal state.
- * - StateMachineDefinition: use this explicit set of possible states when it fits.
- *   Explicit-definition sessions are constrained to this definition; if none of its
- *   states fit, the selected state can be undefined and the runner can answer normally.
+ * - `"agent"`：将 prompt 作为普通的一次性/当前 Session Agent 会话处理。
+ * - `"auto"`：让 runner 分类 prompt 需要哪种模式。即使此前的状态机已到达终态，auto
+ *   Session 仍可随时间创建新的状态机定义。
+ * - StateMachineDefinition：在适用时使用这组显式候选状态。显式定义 Session 受该定义
+ *   限制；如果没有状态适配，选中状态可以是 undefined，runner 可以正常回答。
  */
 export type TurnMode = "agent" | "auto" | StateMachineDefinition;
 
@@ -171,281 +141,243 @@ export type TurnStateStatus =
   | "interrupted"
   | TurnRunnerTerminalStatus;
 
-/** TurnRunner-owned state snapshot needed to continue a later turn. */
+/** 继续后续 turn 所需的、由 TurnRunner 拥有的状态快照。 */
 export interface TurnState {
-  /** Lifecycle of the current turn state, regardless of agent or state-machine mode. */
+  /** 当前 turn state 的生命周期，无论处于 Agent 还是状态机模式。 */
   status: TurnStateStatus;
   /**
-   * The mode originally used to start the session. This is required on resume so
-   * "auto" sessions can keep creating definitions while explicit-definition sessions
-   * stay constrained to their provided state set.
+   * 最初用于启动 Session 的 mode。恢复时必须保留它，使 `auto` Session 可以继续创建定义，
+   * 而显式定义 Session 仍受提供的状态集合约束。
    */
   mode: TurnMode;
   /**
-   * Effective runtime options for future turns. Persisted separately from agent
-   * transcripts so model, memory model, and thinking level survive resume even
-   * when process defaults change.
+   * 后续 turn 使用的有效运行时选项。与 Agent transcript 分开持久化，使 model、memory model
+   * 和 thinking level 即使进程默认值变化，也能在恢复后保留。
    */
   options?: TurnOptions;
-  /** The agent conversation is always present, including state-machine sessions. */
+  /** 始终存在 Agent conversation，包括状态机 Session。 */
   agent: AgentSession;
-  /** Present when this session is executing in state-machine mode. */
+  /** 当前 Session 正在以状态机模式执行时存在。 */
   stateMachine?: StateMachineSession;
   /**
-   * A completed worker whose parent still owes a next-state selection. Retained
-   * across suspension/restart so continuing retries the decision, not the work.
-   * The output remains in state-machine history rather than being duplicated.
-   * Cleared only when a new state is successfully selected.
+   * 已完成的 worker，但 parent 仍欠一次下一状态选择。跨暂停/重启保留它，因此继续时会重试
+   * decision，而不是重复执行工作。输出保留在状态机 history 中，不会重复记录；只有新状态
+   * 成功选择后才清除。
    */
   pendingStateTransition?: { stateName: string };
 
   /**
-   * Current todo list written by the todo tool. Persisted with the turn state so
-   * resumed runners preserve the same work plan instead of starting with an
-   * empty tool-local list.
+   * todo 工具写入的当前 todo 列表。与 turn state 一起持久化，使恢复的 runner 保留相同的
+   * 工作计划，而不是从空的工具本地列表开始。
    */
   todos?: TurnTodo[];
   /**
-   * User-visible follow-up prompts waiting to be delivered. The runner mirrors
-   * this into pi-agent follow-up queues when a parent agent is active. Each
-   * entry is a subset of `TurnPromptCommand` (its `message` and optional
-   * `images`), persisted alongside state so resumed runners can replay the
-   * same multimodal payload they would have delivered live.
+   * 等待投递给用户的可见 follow-up prompt。parent Agent 活动时，runner 会将它镜像到 pi-agent
+   * follow-up queue。每个条目是 `TurnPromptCommand` 的子集（`message` 和可选的 `images`），
+   * 会与状态一起持久化，使恢复的 runner 能重放本应在线投递的相同多模态 payload。
    */
   followUpQueue?: TurnFollowUpQueueEntry[];
   /**
-   * Commands accepted by the runner but not yet executed because active work
-   * could not absorb them. These are replayed after resume in the original
-   * order when the runner can safely continue.
+   * runner 已接受但尚未执行的 command，因为活动工作无法吸收它们。恢复后 runner 能安全
+   * 继续时，会按原始顺序重放这些 command。
    */
   queuedCommands?: TurnCommand[];
   /**
-   * Durable task descriptors used to reconstruct the live task set after a
-   * snapshot or process restart. `running` tasks hold the current process
-   * awake; `scheduled` tasks permit sleep until their `wakeAt`; terminal task
-   * statuses hold nothing open. Descriptors persist because identity,
-   * ownership, and lifecycle must survive hydration. Their runtime promises
-   * and AbortControllers are process-bound and are deliberately never stored;
-   * hydration marks formerly running work `lost` rather than pretending its
-   * executor survived.
+   * 用于在 snapshot 或进程重启后重建活动 task 集合的 durable task descriptor。`running` task
+   * 会保持当前进程唤醒；`scheduled` task 允许在 `wakeAt` 前睡眠；终态 task status 不持有
+   * 任何资源。descriptor 必须持久化，因为 identity、ownership 和 lifecycle 要跨 hydration
+   * 保留。运行时 promise 和 AbortController 绑定进程，故有意不存储；hydration 会把曾经
+   * running 的工作标记为 `lost`，而不是假装 executor 仍存活。
    */
   tasks?: TaskDescriptor[];
   /**
-   * Retained output captured for process-bound tasks so crash recovery can tell the
-   * next parent pass what each lost executor last reported. Entries use task ids as
-   * keys and retain at most the final three chunks, capped to their last 1,500
-   * characters, so recovery context cannot make the durable snapshot unbounded.
+   * 为进程绑定 task 保留的输出，用于崩溃恢复时告诉下一次 parent pass 每个丢失 executor 最后
+   * 报告的内容。以 task id 为 key，最多保留最后三个 chunk，每个限制为末尾 1,500 个字符，
+   * 防止恢复上下文让 durable snapshot 无界增长。
    */
   taskOutputTails?: Partial<Record<TaskId, string[]>>;
   /**
-   * Lost task ids whose crash-recovery context has not yet been attached to a
-   * parent pass. Persisting this delivery marker prevents repeated process
-   * restarts from silently dropping the reminder before the parent can act on it.
+   * 尚未将崩溃恢复上下文附加到 parent pass 的丢失 task id。持久化此投递标记，防止连续
+   * 重启在 parent 行动前悄悄丢掉提醒。
    */
   pendingLostTaskReminderTaskIds?: TaskId[];
   /**
-   * Numeric suffix to allocate for the next task id. Persisting the allocator
-   * alongside descriptors keeps ids monotonic even when terminal descriptors
-   * have been compacted or a process resumes from state.json.
+   * 为下一个 task id 分配的数字后缀。将分配器与 descriptor 一起持久化，即使终态 descriptor
+   * 被压缩或从 state.json 恢复，也能保持 id 单调递增。
    */
   nextTaskId?: number;
   /**
-   * Persisted wire-shaping state. Carries the sticky eviction horizon and
-   * any future wire-shaping fields across resume so a compacted session
-   * keeps its trimmed wire-tail — the durable transcript still holds the
-   * full history, but the next outgoing prompt continues to ship only the
-   * post-horizon slice. Absent on fresh sessions; the runner falls back
-   * to `createInitialHorizon()`.
+   * 持久化的 wire-shaping 状态。跨 resume 携带 sticky eviction horizon 和未来的 wire-shaping
+   * 字段，使压缩后的 Session 保留裁剪过的 wire-tail——durable transcript 仍保留完整历史，
+   * 但下一个 outgoing prompt 继续只发送 horizon 之后的切片。新 Session 没有此字段；runner
+   * 会回退到 `createInitialHorizon()`。
    */
   wireGuardHorizon?: WireGuardHorizon;
 }
 
 /**
- * Sticky eviction point for the actor agent's wire-tail. Pi-agent re-runs
- * `transformContext` on every turn against the full untransformed history;
- * if the projection's cut moved every turn, the prompt-cache prefix would
- * be invalidated each time. By pinning the cut to a timestamp that only
- * advances, the dropped prefix stays content-deterministic across turns
- * and subsequent turns re-hit the provider's prompt cache.
+ * actor Agent wire-tail 的 sticky eviction 点。pi-agent 每个 turn 都会对完整的未转换历史重新
+ * 运行 `transformContext`；如果 projection 的裁剪点每轮移动，prompt-cache 前缀会每次失效。
+ * 将裁剪固定到只会推进的 timestamp 后，被丢弃的前缀在内容上保持确定，后续 turn 可以重新
+ * 命中 provider prompt cache。
  *
- * The runtime keeps a single mutable instance per runner (held by
- * `TurnRunner.wireGuardHorizon` and referenced from the observational
- * context transform). It is round-tripped through `TurnState` so resume
- * preserves the trimmed wire-tail; advances when the observational
- * context transform's auto-trigger fires, when
- * `tryRecoverFromContextOverflow` reacts to a provider overflow error,
- * or when the user invokes `compact`.
+ * runtime 为每个 runner 保留一个可变实例（由 `TurnRunner.wireGuardHorizon` 持有，并由
+ * observational context transform 引用）。它通过 `TurnState` 往返持久化，使 resume 保留
+ * 裁剪后的 wire-tail；当 observational context transform 的 auto-trigger 触发、
+ * `tryRecoverFromContextOverflow` 响应 provider overflow error，或用户调用 `compact` 时推进。
  *
- * Defined as an object (rather than a bare timestamp) so future
- * wire-shaping fields land here and persist alongside the horizon
- * without a schema change.
+ * 定义为对象而不是裸 timestamp，使未来的 wire-shaping 字段可以在不改 schema 的情况下
+ * 与 horizon 一起持久化。
  */
 export interface WireGuardHorizon {
-  /** Messages with `timestamp <= evictionHorizon` are dropped from the wire. */
+  /** `timestamp <= evictionHorizon` 的消息会从 wire 中丢弃。 */
   evictionHorizon: number;
 }
 
-/**
- * How a follow-up prompt should be delivered while a pi session is active.
- *
- * - "steer": deliver as an interruption/steering message to the active pi agent.
- * - "follow_up": queue until the active pi agent finishes its current turn.
- */
+/** pi Session 活动时，follow-up prompt 的投递方式。 */
 export type TurnPromptBehavior = "steer" | "follow_up";
 
 export interface TurnOptions {
-  /** Model override for the user-visible agent turn, as shorthand or provider:modelId. */
+  /** 面向用户的 Agent turn 的 model 覆盖值，可以是 shorthand 或 provider:modelId。 */
   model?: string;
   /**
-   * Model override for observational memory extraction and reflection, in
-   * shorthand or provider:modelId format. When omitted, memory work uses the runner's
-   * configured `memoryModel`, then the default memory model.
+   * observation memory 提取和 reflection 使用的 model 覆盖值，可以是 shorthand 或
+   * provider:modelId。省略时使用 runner 的 `memoryModel`，再回退到默认 memory model。
    */
   memoryModel?: string;
   thinkingLevel?: ThinkingLevel;
 }
 
 export interface TurnQuestionOption {
-  /** Display label shown to the user. */
+  /** 展示给用户的选项标签。 */
   label: string;
-  /** Optional extra context for the option. */
+  /** 选项的可选额外上下文。 */
   description?: string;
 }
 
 export interface TurnQuestion {
-  /** Question text shown to the user. */
+  /** 向用户展示的问题文本。 */
   question: string;
-  /** Optional section heading for grouped questions. */
+  /** 分组问题的可选分节标题。 */
   header?: string;
-  /** Available answers. */
+  /** 可用的回答选项。 */
   options: TurnQuestionOption[];
-  /** Whether multiple options can be selected. */
+  /** 是否可以选择多个选项。 */
   multiSelect?: boolean;
 }
 
 export type TurnTodoStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface TurnTodo {
-  /** Stable identifier used by todo edits to replace an existing work item. */
+  /** todo 编辑用于替换已有工作项的稳定标识符。 */
   id: string;
-  /** Stable UI-facing label for the work item. */
+  /** 面向稳定 UI 的工作项标签。 */
   content: string;
-  /** Current progress state for the work item. */
+  /** 工作项的当前进度状态。 */
   status: TurnTodoStatus;
 }
 
-/** Token accounting mirrors pi's Usage shape so runner events can forward provider usage without renaming fields. */
+/** token accounting 镜像 pi 的 Usage 形状，使 runner event 可以转发 provider usage 而不重命名字段。 */
 export type TurnTokenUsage = Usage;
 
 export type TurnStep =
   | {
       type: "text_delta";
-      /** Partial assistant text streamed before the canonical `text` step arrives. */
+      /** canonical `text` step 到达前流式发送的部分 assistant 文本。 */
       delta: string;
     }
   | {
       type: "reasoning_delta";
-      /** Partial reasoning streamed before the canonical `reasoning` step arrives. */
+      /** canonical `reasoning` step 到达前流式发送的部分 reasoning。 */
       delta: string;
     }
   | { type: "text"; text: string }
   | { type: "reasoning"; text: string }
   | {
       /**
-       * A tool call has started executing. This is the transient precursor to
-       * the canonical `tool_call` step, the way `text_delta` precedes `text`.
+       * 工具调用已开始执行。这是 canonical `tool_call` step 的临时前置事件，
+       * 类似 `text_delta` 先于 `text`。
        */
       type: "tool_call_start";
       toolName: string;
-      /** Correlates this start with its canonical `tool_call` step. */
+      /** 将此 start 与对应的 canonical `tool_call` step 关联起来。 */
       toolCallId: string;
-      /** Tool arguments as parsed by the model. Shape is tool-specific. */
+      /** 模型解析的工具参数；形状由具体工具决定。 */
       input?: Record<string, any>;
     }
   | {
       /**
-       * The canonical record of a finished tool call. Like the `text` step
-       * after `text_delta`, it is self-contained: it echoes the call's
-       * `input` alongside the result so consumers can render the finished
-       * call without stitching state from the earlier `tool_call_start`.
+       * 已结束工具调用的 canonical 记录。类似 `text_delta` 之后的 `text`，它是自包含的：
+       * 会在 result 旁回显调用的 `input`，使消费者无需从较早的 `tool_call_start` 拼接状态，
+       * 就能渲染已结束的调用。
        */
       type: "tool_call";
       toolName: string;
-      /** Matches the `toolCallId` of the `tool_call_start` step that began this call. */
+      /** 与开始此调用的 `tool_call_start` step 的 `toolCallId` 匹配。 */
       toolCallId: string;
-      /** Tool arguments echoed from the matching `tool_call_start`. */
+      /** 从匹配的 `tool_call_start` 回显的工具参数。 */
       input?: Record<string, any>;
-      /** Whether the tool finished with an error. */
+      /** 工具是否以错误结束。 */
       isError: boolean;
-      /** Tool result content. */
+      /** 工具结果内容。 */
       output?: (TextContent | ImageContent)[];
-      /** Tool-specific structured result metadata used for machine-readable outcomes. */
+      /** 用于机器可读结果的、工具专属的结构化结果元数据。 */
       details?: unknown;
     }
   | { type: "system"; message: string };
 
 /**
- * HTTP MCP server configuration.
+ * HTTP MCP server 配置。
  *
- * The runner connects via the streamable-HTTP transport, lists the server's
- * tools at start, and exposes them to the agent under names of the form
- * `{server}__{tool}`. Authentication is intentionally out of scope: pass any
- * credentials the server expects through `headers`.
+ * runner 通过 streamable-HTTP transport 连接，在 start 时列出 server 的 tools，并以
+ * `{server}__{tool}` 形式的名称暴露给 Agent。认证有意不在此处处理：通过 `headers`
+ * 传入 server 要求的凭据。
  */
 export interface McpHttpServerConfig {
-  /** Transport tag. Only `"http"` is supported today. */
+  /** transport 标签；目前只支持 `"http"`。 */
   type: "http";
-  /** Absolute http or https URL of the remote MCP endpoint. */
+  /** 远程 MCP endpoint 的绝对 http 或 https URL。 */
   url: string;
-  /** Extra HTTP headers sent on every request to this server. */
+  /** 每次向此 server 发请求时携带的额外 HTTP header。 */
   headers?: Record<string, string>;
 }
 
 /**
- * Set up a new turn-runner session.
+ * 建立新的 turn-runner Session。
  *
- * `start` is a setup command, not a turn. The runner loads memory and skills,
- * stores its initial `TurnState` (either fresh or the resumed one passed via
- * `state`), and emits `turn_started`. No agent work runs. The caller sends
- * `prompt` afterwards to actually run a turn. Skills, agent files, and skill
- * collisions are exposed through dedicated runner methods so callers can
- * render the setup summary without subscribing to a dedicated event.
+ * `start` 是 setup command，不是 turn。runner 加载 memory 和 skills，保存初始 `TurnState`
+ *（新建或通过 `state` 传入的恢复状态），并发送 `turn_started`。不会运行 Agent 工作；
+ * 调用方之后发送 `prompt` 才真正运行 turn。skills、Agent 文件和 skill 冲突通过 runner
+ * 专用方法暴露，使调用方无需订阅专用 event 即可渲染 setup 摘要。
  *
- * The CLI/TUI sends this on launch so the user sees the available skills
- * before typing the first prompt.
+ * CLI/TUI 启动时发送它，使用户在输入第一个 prompt 前就能看到可用 skills。
  */
 export interface TurnStartCommand {
   type: "start";
-  /** Routing mode for subsequent prompts. Omit to use the turn runner's configured default. */
+  /** 后续 prompt 的路由模式。省略时使用 turn runner 配置的默认值。 */
   mode?: TurnMode;
   /**
-   * Existing state to resume. When provided, the runner emits `turn_started`
-   * with this state instead of creating a fresh one. Resumed sessions keep
-   * their persisted agent and state-machine history.
+   * 要恢复的已有状态。提供后，runner 会用此状态发送 `turn_started`，而不是新建状态。
+   * 恢复的 Session 保留其持久化的 Agent 和状态机历史。
    */
   state?: TurnState;
   /**
-   * Session-scoped runtime options. These are fixed when the runner starts so
-   * the parent pi-agent keeps a stable model, thinking level, and prompt cache
-   * shape across every pi-agent turn inside later relay-pi turns.
+   * Session-scoped runtime options。runner 启动时固定它们，使 parent pi-agent 在后续每个
+   * relay-pi turn 内都保持稳定的 model、thinking level 和 prompt cache 形状。
    */
   options?: TurnOptions;
   /**
-   * Remote MCP servers to connect to before the first turn runs. Each entry's
-   * tools are exposed to the parent and state agents under namespaced names.
-   * Connection failures are logged and skipped so a single broken server
-   * cannot block session setup.
+   * 在第一个 turn 运行前连接的远程 MCP server。每个条目的 tools 会以命名空间名称暴露给
+   * parent 和 state Agent。连接失败会记录并跳过，因此单个损坏的 server 不会阻塞 Session setup。
    */
   mcpServers?: Record<string, McpHttpServerConfig>;
 }
 
 /**
- * Image attachment carried alongside a prompt's text. The data is base64-encoded
- * raw image bytes (no `data:` URL prefix) and `mimeType` is the standard
- * `image/png`, `image/jpeg`, etc. label vision-capable models expect.
+ * 与 prompt 文本一起携带的图像附件。数据是 base64 编码的原始图像字节（不带 `data:` URL
+ * 前缀），`mimeType` 使用视觉模型期望的标准标签，如 `image/png`、`image/jpeg`。
  *
- * Attachments are passed verbatim to the underlying agent as multimodal user
- * content; the surrounding `message` text remains the prompt's primary body.
+ * 附件会原样传给底层 Agent，作为多模态 user content；外层 `message` 文本仍是 prompt 的主体。
  */
 export interface TurnPromptImage {
   data: string;
@@ -453,12 +385,11 @@ export interface TurnPromptImage {
 }
 
 /**
- * Pending follow-up prompt waiting to be replayed against the parent agent.
+ * 等待重新投递给 parent Agent 的 pending follow-up prompt。
  *
- * Shape is a subset of `TurnPromptCommand` (the user-facing prompt fields,
- * minus `behavior`, which is implicit — every queued entry runs as a
- * follow-up). Persisted with `TurnState.followUpQueue` so resumed sessions
- * deliver the same multimodal payload the original turn would have.
+ * 形状是 `TurnPromptCommand` 的子集（用户可见的 prompt 字段，不含隐含的 `behavior`——
+ * 每个排队条目都会作为 follow-up 运行）。与 `TurnState.followUpQueue` 一起持久化，使恢复的
+ * Session 投递与原始 turn 本应发送的相同多模态 payload。
  */
 export interface TurnFollowUpQueueEntry {
   message: string;
@@ -466,123 +397,99 @@ export interface TurnFollowUpQueueEntry {
 }
 
 /**
- * Send a new user prompt against the runner's current state.
+ * 针对 runner 当前状态发送新的用户 prompt。
  *
- * Callers may send prompt commands even while a previous `turn()` call is
- * active. The turn runner maps `behavior` onto the active pi agent when it can
- * and otherwise queues the command behind active non-agent work. State is held
- * inside the runner; it was bootstrapped at `start` and is updated from the
- * runner's own terminal events.
+ * 即使上一次 `turn()` 调用仍活动，调用方也可以发送 prompt command。runner 会在可能时
+ * 将 `behavior` 映射到活动 pi Agent，否则将 command 排到活动的非 Agent 工作之后。状态保留
+ * 在 runner 内部：由 `start` 引导，并从 runner 自己的终态 event 更新。
  */
 export interface TurnPromptCommand {
   type: "prompt";
   message: string;
   /**
-   * Delivery behavior for this user message. The runner decides whether the
-   * parent pi-agent or state-machine work is currently driving the public
-   * relay-pi turn; that driver determines whether this reaches pi immediately
-   * or waits for state-transition context.
+   * 此用户消息的投递行为。runner 会判断当前是 parent pi-agent 还是状态机工作在驱动公开的
+   * relay-pi turn；该 driver 决定消息立即到达 pi，还是等待状态转换上下文。
    */
   behavior: TurnPromptBehavior;
   /**
-   * Optional image attachments delivered as multimodal content to the parent
-   * pi-agent. Empty/undefined means a plain-text prompt; the previous behavior.
+   * 作为多模态内容投递给 parent pi-agent 的可选图像附件。空值/undefined 表示纯文本 prompt，
+   * 即此前的行为。
    */
   images?: TurnPromptImage[];
 }
 
 /**
- * Provide answers to a structured question emitted by the runner.
+ * 为 runner 发出的结构化问题提供回答。
  *
- * Answers serialize into parent-agent prompt text and follow the same active
- * turn behavior as prompts. State-agent answers also route through the parent,
- * which can inspect state-machine history and select the appropriate state.
+ * 回答会序列化为 parent Agent prompt 文本，并遵循与 prompt 相同的活动 turn 行为。
+ * state Agent 的回答也会经过 parent，由 parent 检查状态机 history 并选择合适状态。
  */
 export interface TurnAnswerCommand {
   type: "answer";
   questions: TurnQuestion[];
   /**
-   * Selected option labels per question, keyed by `question.question`.
-   * Always an array so single-select and multi-select share one shape; a
-   * single-select answer is a one-element array, and an empty array means
-   * the user advanced past a multi-select question without picking anything.
+   * 每个问题选中的选项标签，以 `question.question` 为 key。
+   * 始终使用数组，使单选和多选共享同一形状；单选回答是单元素数组，空数组表示用户在
+   * 多选问题中未选择任何内容就继续了。
    */
   answers: Record<string, string[]>;
-  /** Same delivery behavior as prompts after the answers are serialized. */
+  /** 序列化回答后的投递行为，与 prompt 相同。 */
   behavior: TurnPromptBehavior;
   /**
-   * Optional free-form prompt appended after the serialized answer XML.
-   * Lets the user flush partial answers and a new instruction in one turn
-   * when they decide to type instead of finishing the picker.
+   * 序列化后的 answer XML 后追加的可选自由文本 prompt。
+   * 用户决定直接输入而不是完成 picker 时，可以在一个 turn 中提交部分回答和新指令。
    */
   message?: string;
   /**
-   * Optional image attachments delivered alongside the synthesized prompt,
-   * matching `TurnPromptCommand.images` semantics.
+   * 与合成 prompt 一起投递的可选图像附件，语义与 `TurnPromptCommand.images` 相同。
    */
   images?: TurnPromptImage[];
 }
 
-/** Wake the runner's sleeping state. If the state is not waiting on scheduled work, this is a no-op. */
+/** 唤醒 runner 的睡眠状态；如果状态没有等待计划工作，则这是 no-op。 */
 export interface TurnWakeCommand {
   type: "wake";
 }
 
 /**
- * Replace the currently visible follow-up queue.
+ * 替换当前可见的 follow-up queue。
  *
- * This is an out-of-band edit command for UI clients. It mirrors the queue into
- * the active pi agent when possible, but the protocol event is emitted from the
- * runner-owned prompt list so clients can render and edit it directly.
+ * 这是 UI client 使用的带外编辑 command。可能时会将 queue 镜像到活动 pi Agent，但 protocol
+ * event 来自 runner 拥有的 prompt 列表，使 client 可以直接渲染和编辑它。
  */
 export interface TurnEditFollowUpQueueCommand {
   type: "edit_follow_up_queue";
-  /** Full replacement queue, in the order prompts should be delivered. */
+  /** prompt 应投递的完整替换 queue，按投递顺序排列。 */
   prompts: TurnFollowUpQueueEntry[];
 }
 
-/**
- * Commands that drive a single turn-runner turn. `start` is excluded because
- * setup is not a turn and is handled by `TurnRunner.start()` directly.
- */
+/** 驱动一次 turn-runner turn 的 command。排除 `start`，因为 setup 不是 turn，直接由 `TurnRunner.start()` 处理。 */
 export type TurnCommand = TurnPromptCommand | TurnAnswerCommand | TurnWakeCommand;
 
-/** Out-of-band control message that interrupts the currently running turn. */
+/** 在当前运行 turn 外带控制消息，用于中断它。 */
 export interface TurnInterruptCommand {
   type: "interrupt";
 }
 
 /**
- * Out-of-band control message that compacts the runner's wire-visible
- * message tail. The durable transcript in `TurnState.agent.messages` is
- * **not** mutated — the runner instead advances its sticky wire-shaping
- * eviction horizon so the next request to the actor model dispatches a
- * smaller prompt. Scrollback, resume, and observer/reflector passes all
- * keep their full history.
+ * 在 runner 的 wire-visible 消息尾部执行压缩的带外控制消息。`TurnState.agent.messages` 中的
+ * durable transcript **不会**被修改；runner 只推进 sticky wire-shaping eviction horizon，使
+ * 下一次向 actor model 发出的请求携带更小的 prompt。scrollback、resume 以及 observer/reflector
+ * pass 都保留完整历史。
  *
- * Target selection (against the current wire-tail, not the durable
- * transcript):
- *  - When the wire-tail currently occupies more than 20% of the parent
- *    agent's effective context window, the target is that 20% ceiling —
- *    leaving 80% headroom for system prompt, memory packs, the next user
- *    prompt, and the next assistant response.
- *  - When the wire-tail is already under 20%, the target halves the
- *    current wire-tail tokens instead. `compact` is user-initiated, so
- *    an already-light session still produces visible relief rather than
- *    silently no-opping.
+ * 目标选择针对当前 wire-tail，而不是 durable transcript：
+ * - 当 wire-tail 当前占 parent Agent effective context window 的 20% 以上时，目标是 20% 上限，
+ *   为 system prompt、memory pack、下一个用户 prompt 和下一个 assistant 响应留下 80% 余量。
+ * - 当 wire-tail 已低于 20% 时，目标改为当前 wire-tail token 数的一半。`compact` 由用户发起，
+ *   因此即使 Session 已经很轻，也会产生可见的缓解，而不是静默 no-op。
  *
- * Unlike the automatic wire-shaping trigger (which only fires when the
- * actor's context-window budget is breached), `compact` runs even when
- * the wire is already under that budget, so callers can free context on
- * demand.
+ * 与自动 wire-shaping trigger（只有 actor context-window 预算超限时才触发）不同，`compact`
+ * 即使 wire 已低于预算也会运行，使调用方可以按需释放上下文。
  *
- * `compact` does not start or end a turn. It is rejected with a soft
- * warning when a turn chain is in flight — mutating the horizon
- * mid-stream would invalidate the request the parent (or a state agent)
- * is already dispatching. Poll/timer sleeps have already resolved the
- * chain by the time they emit their `sleep` terminal, so compact runs
- * cleanly during those waits; callers only need to defer compact while a
- * turn is actively dispatching.
+ * `compact` 不会开始或结束 turn。turn chain 正在运行时，它会以 soft warning 被拒绝——在
+ * stream 中途修改 horizon 会使 parent（或 state Agent）已经 dispatch 的请求失效。poll/timer
+ * sleep 发出 `sleep` 终态前已经解析完 chain，因此等待期间可以干净地运行 compact；调用方只需
+ * 在 turn 正在 dispatch 时推迟 compact。
  */
 export interface TurnCompactCommand {
   type: "compact";
@@ -595,10 +502,10 @@ export type TurnRunnerCommand =
   | TurnEditFollowUpQueueCommand
   | TurnCompactCommand;
 
-/** RPC transport envelope for commands whose delivery must be correlated. */
+/** delivery 必须关联时使用的 RPC transport envelope。 */
 export type RpcTurnCommand = TurnCommand & { requestId: string };
 
-/** Commands accepted by the newline-delimited RPC transport. */
+/** 换行分隔 RPC transport 接受的 command。 */
 export type RpcRunnerCommand =
   | TurnStartCommand
   | RpcTurnCommand
@@ -606,17 +513,17 @@ export type RpcRunnerCommand =
   | TurnEditFollowUpQueueCommand
   | TurnCompactCommand;
 
-/** A system-prompt file that was resolved on disk for the session. */
+/** 为 Session 在磁盘上解析出的 system-prompt 文件。 */
 export interface TurnAgentFile {
-  /** Configured file name relative to the working directory, e.g. "AGENTS.md". */
+  /** 相对于工作目录配置的文件名，例如 "AGENTS.md"。 */
   name: string;
-  /** Absolute path on disk. */
+  /** 磁盘上的绝对路径。 */
   path: string;
 }
 
 export interface TurnStartedEvent {
   type: "turn_started";
-  /** Full turn state after applying config/options/auto routing. */
+  /** 应用 config/options/auto routing 后的完整 turn state。 */
   state: TurnState;
 }
 
@@ -624,60 +531,58 @@ export interface TurnStepEvent {
   type: "step";
   step: TurnStep;
   /**
-   * Set when a task-backed subagent produced the step. Absent for the parent
-   * agent; correlate `taskId` with `task_started` for its name and role.
+   * task-backed 子 Agent 产生此 step 时设置。parent Agent 不设置；将 `taskId` 与
+   * `task_started` 关联即可取得其名称和角色。
    */
   origin?: TurnEventOrigin;
 }
 
-/** Identifies the task runtime that produced a non-parent event. */
+/** 标识生成非 parent event 的 task runtime。 */
 export interface TurnEventOrigin {
-  /** Stable identity shared by spawned and state-machine subagents. */
+  /** spawned 和 state-machine 子 Agent 共享的稳定 identity。 */
   taskId: TaskId;
 }
 
-/** Emitted once after a task id is allocated and its descriptor becomes observable. */
+/** task id 分配且 descriptor 可观察后发送一次。 */
 export interface TurnTaskStartedEvent {
   type: "task_started";
-  /** Full durable descriptor at task start. */
+  /** task 启动时的完整 durable descriptor。 */
   task: TaskDescriptor;
-  /** Present when another task runtime caused this lifecycle change. */
+  /** 由另一个 task runtime 引起此生命周期变化时存在。 */
   origin?: TurnEventOrigin;
 }
 
-/** Emitted for one newly appended task-output chunk while the turn remains open. */
+/** turn 保持打开时，每追加一个 task-output chunk 发送一次。 */
 export interface TurnTaskOutputEvent {
   type: "task_output";
   taskId: TaskId;
   /**
-   * Delta output only; consumers append chunks in event order. This is not a
-   * cumulative replay. Late attach and explicit task_output requests obtain
-   * the cumulative buffered snapshot from TaskManager instead.
+   * 仅包含增量输出；消费者按 event 顺序追加 chunk。这不是累计 replay。late attach 和显式
+   * task_output 请求会从 TaskManager 获取累计缓冲 snapshot。
    */
   chunk: string;
-  /** Present when another task runtime caused this lifecycle change. */
+  /** 由另一个 task runtime 引起此生命周期变化时存在。 */
   origin?: TurnEventOrigin;
 }
 
-/** Emitted once when a task reaches a terminal lifecycle status. */
+/** task 到达终态 lifecycle status 后发送一次。 */
 export interface TurnTaskSettledEvent {
   type: "task_settled";
-  /** Terminal value, including whether work completed, failed, stopped, or was lost. */
+  /** 终态值，包括工作是 completed、failed、stopped 还是 lost。 */
   settlement: TaskSettlement;
-  /** Present when another task runtime caused this lifecycle change. */
+  /** 由另一个 task runtime 引起此生命周期变化时存在。 */
   origin?: TurnEventOrigin;
 }
 
 /**
- * RPC transport liveness signal emitted while in-process tasks keep a turn
- * open. It is transport telemetry rather than model activity: runners do not
- * add it to agent transcripts, routing observations, or memory.
+ * 进程内 task 保持 turn 打开时发送的 RPC transport liveness signal。它是 transport telemetry
+ * 而非 model activity：runner 不会把它加入 Agent transcript、routing observations 或 memory。
  */
 export interface TurnHeartbeatEvent {
   type: "heartbeat";
-  /** Timestamp from the RPC transport's runtime clock. */
+  /** RPC transport runtime clock 提供的 timestamp。 */
   timestamp: number;
-  /** Running task ids that currently require the RPC process to stay awake. */
+  /** 当前需要 RPC 进程保持唤醒的运行中 task id。 */
   activeTaskIds: TaskId[];
 }
 
@@ -688,16 +593,15 @@ export interface TurnTodosEvent {
 
 export interface TurnFollowUpQueueEvent {
   type: "follow_up_queue";
-  /** Prompts currently waiting to run as follow-ups after active work settles. */
+  /** 活动工作 settlement 后等待作为 follow-up 运行的 prompt。 */
   followUpQueue: TurnFollowUpQueueEntry[];
 }
 
 export interface TurnStateMachineEvent {
   type: "state_machine";
   /**
-   * Full session snapshot so one event has everything a UI needs to
-   * render the relay. `stateMachine.progress.states[name].runs > 0`
-   * is the "already ran" signal.
+   * 完整 Session snapshot，使单个 event 包含 UI 渲染 relay 所需的一切。
+   * `stateMachine.progress.states[name].runs > 0` 表示“已经运行过”。
    */
   stateMachine: StateMachineSession;
 }
@@ -707,153 +611,116 @@ export interface TurnMemoryEvent extends ObservationalMemoryActivityEvent {
 }
 
 /**
- * Per-segment estimate of how many tokens currently occupy each region of
- * the parent agent's input. Distinct from `TurnTokenUsage`, which reports
- * the flat provider-side totals: this breakdown attributes the occupancy
- * to the segments the runner controls, so surfaces can show *which* part
- * of the budget is filling up. Values are heuristic character-length
- * estimates, not exact tokenizer counts.
+ * parent Agent 输入各区域当前占用 token 数的分段估算。它不同于报告 provider 平面总量的
+ * `TurnTokenUsage`：此分解将占用归因到 runner 控制的 segment，使界面可以显示预算究竟
+ * 被哪一部分填满。数值是基于字符长度的启发式估算，而不是精确 tokenizer 计数。
  *
- * On `usage` events, the runner rescales these four fields so their sum
- * equals the latest parent assistant message's `totalTokens` from the
- * provider. The event's `usage` field carries the *running turn aggregate*,
- * while this breakdown describes the latest parent input — the two
- * intentionally have different denominators.
+ * 在 `usage` event 中，runner 会重新缩放这四个字段，使其总和等于 provider 提供的最新
+ * parent assistant message 的 `totalTokens`。event 的 `usage` 字段携带运行中的 turn aggregate，
+ * 而此分解描述最新的 parent input——两者有意使用不同分母。
  */
 export interface TurnContextWindowUsage {
   /**
-   * Tokens occupied by the parent agent's full system prompt, including
-   * the base coding-agent prompt, any user-supplied `systemInstructions`,
-   * and every system-prompt file loaded from disk (typically `AGENTS.md`).
+   * parent Agent 完整 system prompt 占用的 token，包括基础 coding-agent prompt、用户提供的
+   * `systemInstructions` 以及从磁盘加载的每个 system-prompt 文件（通常是 `AGENTS.md`）。
    */
   systemPrompt: number;
   /**
-   * Tokens occupied by the raw message history that will be sent on the
-   * next turn. Includes the latest assistant response just appended to
-   * state. Synthetic memory wrappers re-injected by the transform on each
-   * request are not counted; they are transient.
+   * 下一个 turn 将发送的原始消息历史占用的 token，包括刚追加到 state 的最新 assistant 响应。
+   * 每次请求由 transform 重新注入的 synthetic memory wrapper 不计入；它们是临时的。
    */
   messages: number;
   /**
-   * Tokens occupied by the current session's local memory pack rendered
-   * into the actor prefix. Sums the `content` field of every observation
-   * and reflection in the frozen local pack.
+   * 渲染到 actor prefix 的当前 Session local memory pack 占用的 token。
+   * 汇总 frozen local pack 中每个 observation 和 reflection 的 `content` 字段。
    */
   localMemory: number;
   /**
-   * Tokens occupied by the cross-session global memory pack rendered into
-   * the actor prefix. Sums the `content` field of every observation and
-   * reflection in the frozen global pack.
+   * 渲染到 actor prefix 的跨 Session global memory pack 占用的 token。
+   * 汇总 frozen global pack 中每个 observation 和 reflection 的 `content` 字段。
    */
   globalMemory: number;
 }
 
 /**
- * Token-accounting payload shared by the `usage` during-event and every
- * terminal event. Bundling these fields under one interface keeps the
- * during stream and terminal events in lockstep: every `usage` event and
- * every terminal event sees the same shape, and a consumer that only reads
- * terminals can still recover the running aggregate plus the latest parent
- * context bar.
+ * `usage` during-event 和每个终态 event 共用的 token accounting payload。将字段放进同一接口
+ * 可使 during stream 与终态 event 保持同步：每个 `usage` event 和终态 event 都拥有相同形状，
+ * 只读取终态的消费者也能恢复运行中的 aggregate 和最新 parent context bar。
  *
- * Two distinct token totals are reported:
- *  - `turnUsage` is a per-turn aggregate across every successfully recorded LLM
- *    call (parent worker, state agents, classifier, advisor, and memory workers).
- *    Use it for cost accounting and "what did this turn cost" readouts. It is
- *    not comparable to `effectiveContextWindow` because the cap is per-request.
- *  - `lastMessageUsage` is the exact provider-reported usage of the
- *    most recent parent assistant message. Use it for context-window
- *    pressure surfaces ("X / cap"): `lastMessageUsage.totalTokens` is
- *    the true occupancy of the parent's window on the latest call, and
- *    `contextWindowUsage` provides a heuristic segment breakdown over
- *    the same total.
+ * 报告两种不同的 token 总量：
+ * - `turnUsage`：每个 turn 的 aggregate，覆盖所有成功记录的 LLM 调用（parent worker、state
+ *   Agent、classifier、advisor 和 memory worker）。用于成本统计和“本 turn 花了多少”的展示。
+ *   它不能与 `effectiveContextWindow` 比较，因为上限按请求计算。
+ * - `lastMessageUsage`：最近一条 parent assistant message 的精确 provider usage。用于上下文
+ *   窗口压力展示（“X / cap”）：`lastMessageUsage.totalTokens` 是最近调用中 parent window 的
+ *   实际占用，`contextWindowUsage` 则提供同一总量上的启发式分段分解。
  */
 export interface TurnUsageFields {
   /**
-   * Running turn aggregate: the sum of every model `usage` recorded so far in
-   * this turn, including parent, state-agent, classifier, advisor, and memory
-   * calls. Always cumulative; never a single-call delta.
+   * 运行中的 turn aggregate：到目前为止此 turn 记录的每个 model `usage` 之和，包括 parent、
+   * state Agent、classifier、advisor 和 memory 调用。始终是累计值，不是单次调用的 delta。
    */
   turnUsage: TurnTokenUsage;
   /**
-   * Same aggregate as `turnUsage`, partitioned by the model that produced
-   * each call — so a relay turn whose state agents ran on a different model
-   * than the parent can be attributed per model. The invariant
-   * `sum(usageByModel[].usage.cost.total) === turnUsage.cost.total` holds.
-   * Empty array when no usage has been recorded yet.
+   * 与 `turnUsage` 相同的 aggregate，但按产生每次调用的 model 分组——因此 state Agent 使用不同
+   * model 的 relay turn 可以按 model 归因。不变量 `sum(usageByModel[].usage.cost.total) === turnUsage.cost.total`。
+   * 尚未记录 usage 时为空数组。
    */
   usageByModel: ModelUsageEntry[];
   /**
-   * Provider-reported usage from the latest parent assistant message.
-   * Refreshed on every parent `message_end` and held stable while only state
-   * agents or auxiliary calls advance `turnUsage`. This is the accurate number
-   * to display against `effectiveContextWindow` — it reflects exactly what
-   * the API counted on the most recent parent call (`input` is fresh
-   * input, `cacheRead` + `cacheWrite` are the cache hits/writes, and
-   * `totalTokens` is their sum plus `output`).
+   * 最近一条 parent assistant message 的 provider usage。每次 parent `message_end` 刷新；只有
+   * state Agent 或辅助调用推进 `turnUsage` 时保持不变。这是与 `effectiveContextWindow` 比较
+   * 时应展示的准确数字——它反映 API 对最近一次 parent 调用的精确计数（`input` 是新输入，
+   * `cacheRead` + `cacheWrite` 是缓存命中/写入，`totalTokens` 是它们与 `output` 的总和）。
    */
   lastMessageUsage: TurnTokenUsage;
   /**
-   * Effective ceiling against which `lastMessageUsage.totalTokens` should
-   * be displayed. Reflects the user-set `TurnRunnerConfig.effectiveContext`
-   * (default 200k) clamped to the model's hard context window. Every
-   * memory budget is derived from this same value, so the bar also
-   * represents the practical compaction ceiling. Tracks the latest parent
-   * emission; stays stable when only a state agent advanced
-   * `turnUsage`.
+   * 展示 `lastMessageUsage.totalTokens` 时使用的有效上限。它反映用户设置的
+   * `TurnRunnerConfig.effectiveContext`（默认 200k），并限制到 model 的硬 context window。
+   * 每个 memory budget 都从同一个值派生，因此此 bar 也代表实际的压缩上限。跟踪最新的
+   * parent emission；只有 state Agent 推进 `turnUsage` 时保持稳定。
    */
   effectiveContextWindow: number;
   /**
-   * Heuristic per-segment breakdown of how the latest parent message's
-   * input is allocated across the system prompt, raw message history, and
-   * the two memory pack layers. Lets surfaces visualize *which* budget is
-   * filling up. Rescaled so its four fields sum exactly to
-   * `lastMessageUsage.totalTokens`, so consumers can drive the bar's
-   * segment widths from this breakdown while keeping the absolute scale
-   * grounded in the accurate provider total. Like `effectiveContextWindow`,
-   * this mirrors the latest parent emission and does not move on
-   * state-agent ticks.
+   * 最近一条 parent message 的 input 如何分配到 system prompt、原始消息历史和两个 memory pack
+   * 层的启发式分段分解。让界面可视化究竟是哪个预算在增长。重新缩放后四个字段的总和
+   * 恰好等于 `lastMessageUsage.totalTokens`，因此消费者可以用此分解驱动 bar 的分段宽度，
+   * 同时让绝对尺度以准确的 provider 总量为基准。与 `effectiveContextWindow` 一样，它镜像
+   * 最新的 parent emission，不会在 state Agent tick 时移动。
    */
   contextWindowUsage: TurnContextWindowUsage;
 }
 
 /**
- * One model-and-transport slice of a turn's usage. A fallback can use the
- * same logical model on two providers, so consumers must not merge rows by
- * model id alone.
+ * turn usage 的一个 model-and-transport 分片。fallback 可能在两个 provider 上使用同一逻辑
+ * model，因此消费者不能只按 model id 合并行。
  */
 export interface ModelUsageEntry {
-  /** Provider-specific model id reported by the model runtime. */
+  /** model runtime 报告的 provider-specific model id。 */
   model: string;
-  /** Backend that carried the call and whether its cost is subscription-covered. */
+  /** 承载此次调用的 backend，以及其成本是否由订阅覆盖。 */
   transport: {
     provider: TransportName;
     billing: "plan-covered" | "metered";
   };
-  /** Tokens and cost accumulated for this exact model/provider pair. */
+  /** 此 model/provider 对的累计 token 和成本。 */
   usage: TurnTokenUsage;
 }
 
-/**
- * Emitted after a parent context snapshot exists and metered usage advances.
- * `turnUsage` includes every recorded parent, state-agent, classifier, advisor,
- * and memory call; the context fields remain scoped to the latest parent call.
- */
+/** parent context snapshot 存在且计费 usage 推进后发送。`turnUsage` 包含所有记录的 parent、state Agent、classifier、advisor 和 memory 调用；context 字段仍限定于最近一次 parent 调用。 */
 export interface TurnUsageEvent extends TurnUsageFields {
   type: "usage";
   /**
-   * Set when this usage tick was emitted at a task-backed subagent boundary.
-   * Absent for parent-driven ticks so consumers can attribute running cost.
+   * 此 usage tick 在 task-backed 子 Agent 边界发送时设置。parent 驱动的 tick 不设置，
+   * 使消费者可以归因运行中的成本。
    */
   origin?: TurnEventOrigin;
 }
 
 /**
- * Terminal events embed the same payload optionally: the runner always
- * attaches the final running aggregate plus the latest parent snapshot
- * when at least one assistant message has been recorded this turn. An
- * early terminal that did no LLM work (e.g. an immediate `ask` before
- * any message) may omit them.
+ * 终态 event 可选地嵌入相同 payload：本 turn 至少记录过一条 assistant message 时，runner
+ * 始终附加最终运行 aggregate 和最新 parent snapshot。没有执行 LLM 工作的早期终态（例如在
+ * 任何 message 之前立即 ask）可以省略它们。
  */
 export interface TurnTerminalBaseEvent extends Partial<TurnUsageFields> {
   state: TurnState;
@@ -877,7 +744,7 @@ export interface TurnInterruptedEvent extends TurnTerminalBaseEvent {
 
 export interface TurnSleepEvent extends TurnTerminalBaseEvent {
   type: "sleep";
-  /** Unix timestamp in milliseconds when the outer layer should wake the runner. */
+  /** 外层应唤醒 runner 的 Unix 毫秒 timestamp。 */
   wakeAt: number;
 }
 
@@ -888,17 +755,16 @@ export interface TurnSystemEvent {
 }
 
 /**
- * A concrete model or reasoning-effort change selected by a virtual-model
- * router. Derived from the router's own switch shape so the two can never
- * drift — the runner emits `{ type: "router_switch", ...switched }`.
+ * virtual-model router 选中的具体 model 或 reasoning-effort 变化。派生自 router 自身的 switch
+ * 形状，使两者不会漂移——runner 发送 `{ type: "router_switch", ...switched }`。
  */
 export interface TurnRouterSwitchEvent extends RouterSwitch {
   type: "router_switch";
-  /** Present only if a future independently-routed child agent emits the switch. */
+  /** 只有未来独立路由的 child Agent 发送 switch 时才存在。 */
   origin?: TurnEventOrigin;
 }
 
-/** Events emitted while the runner is still working on the current turn. */
+/** runner 仍在处理当前 turn 时发送的 event。 */
 export type TurnDuringEvent =
   | TurnStepEvent
   | TurnHeartbeatEvent
@@ -913,7 +779,7 @@ export type TurnDuringEvent =
   | TurnSystemEvent
   | TurnRouterSwitchEvent;
 
-/** Events that end the current turn. */
+/** 结束当前 turn 的 event。 */
 export type TurnTerminalEvent =
   | TurnAskEvent
   | TurnCompletedEvent
@@ -922,18 +788,18 @@ export type TurnTerminalEvent =
 
 export type TurnEvent = TurnStartedEvent | TurnDuringEvent | TurnTerminalEvent;
 
-/** RPC-only delivery receipt; runner subscribers never observe this event. */
+/** 仅 RPC 使用的 delivery receipt；runner subscriber 不会观察到此 event。 */
 export interface RpcCommandAcceptedEvent {
   type: "command_accepted";
   requestId: string;
   commandType: RpcTurnCommand["type"];
 }
 
-/** Private host recovery snapshot; never part of the user-visible event history. */
+/** 私有 host recovery snapshot；永远不会进入用户可见的 event history。 */
 export interface RpcCheckpointEvent {
   type: "checkpoint";
   state: TurnState;
 }
 
-/** Complete newline-delimited output union for `relay-pi --rpc`. */
+/** `relay-pi --rpc` 的完整换行分隔输出 union。 */
 export type RpcEvent = TurnEvent | RpcCommandAcceptedEvent | RpcCheckpointEvent;

@@ -16,7 +16,7 @@ const CONTEXT_HINT_LIMIT = 1_000;
 function classifierResultTool(routeNames: string[]) {
   return {
     name: "select_route",
-    description: "Select exactly one existing route for the agent's next work.",
+    description: "为 Agent 接下来的工作选择一个现有路由。",
     parameters: Type.Object(
       {
         route: Type.Union(
@@ -34,75 +34,73 @@ function classifierResultTool(routeNames: string[]) {
 }
 
 /**
- * The runtime milestone that requested a classification. Owned here — where
- * the concept originates — and consumed by the router, the protocol event,
- * and the CLI probe, so the union can never drift across layers.
+ * 请求分类的运行时里程碑。概念在此处定义，由 router、protocol event 和 CLI probe
+ * 消费，因此 union 不会在各层之间漂移。
  */
 export type RouteTrigger = "turn_start" | "cadence" | "advisor" | "step_trigger" | "compaction";
 
-/** Lean routing facts supplied at a turn boundary or intra-turn milestone. */
+/** 在 turn 边界或 turn 内里程碑处提供的精简路由事实。 */
 export interface ClassifierInput {
-  /** Virtual tier whose complete route set is being classified in one call. */
+  /** 本次调用中要分类完整路由集合的虚拟层级。 */
   tierName: string;
-  /** Tier rules shown to the classifier; concrete targets remain hidden. */
+  /** 展示给分类器的层级规则；具体目标对分类器保持隐藏。 */
   tier: TierDefinition;
-  /** Administrator-authored routing and cache-preference policy. */
+  /** 管理员编写的路由和缓存偏好策略。 */
   guidance: string;
-  /** Current concrete target and selecting route, when continuity is possible. */
+  /** 在可保持连续性时使用的当前具体目标和选中路由。 */
   currentTarget?: string;
-  /** Bounded summary of the preceding turn, used only to judge task continuity. */
+  /** 上一回合的有界摘要，仅用于判断任务连续性。 */
   prevTurnHint?: string;
-  /** Bounded description of what changed in the most recent agent step. */
+  /** 最近一次 Agent 步骤发生变化的有界描述。 */
   lastStepDelta?: string;
-  /** Whether the pending input includes images; the router handles capability after classification. */
+  /** 待处理输入是否包含图像；路由器会在分类后处理能力要求。 */
   hasImages: boolean;
-  /** Event that requested classification, for interpreting sparse cadence/advisor context. */
+  /** 请求分类的事件，用于解释稀疏的 cadence/advisor 上下文。 */
   trigger: RouteTrigger;
 }
 
-/** Pure system/user prompt pair consumed by the structured-output classifier call. */
+/** 结构化输出 classifier 调用使用的纯 system/user prompt 对。 */
 export interface ClassifierMessages {
-  /** Stable classifier policy. */
+  /** 稳定的 classifier 策略。 */
   systemPrompt: string;
-  /** Tier rules plus the lean, request-specific routing facts. */
+  /** 层级规则以及精简的请求专属路由事实。 */
   prompt: string;
 }
 
-/** Structured-output call seam; production binds `generateStructuredOutput`. */
+/** 结构化输出调用的接缝；生产环境绑定 `generateStructuredOutput`。 */
 export type ClassifierGenerate = typeof structuredOutput.generateStructuredOutput;
 
-/** One attributed classifier call, shaped the same whichever path ran it. */
+/** 一次 classifier 调用的归因报告；无论从哪条路径运行，形状都一致。 */
 export interface ClassifierUsageReport {
-  /** Provider-specific model id the call billed under. */
+  /** 此次调用计费所使用的 provider-specific model id。 */
   modelId: string;
-  /** Backend that carried the call. */
+  /** 承载此次调用的 backend。 */
   transport: TransportName;
-  /** Priced usage for this classification call. */
+  /** 此次分类调用产生的计费 usage。 */
   usage: Usage;
 }
 
-/** Options for one live route decision. */
+/** 一次实时路由决策的选项。 */
 export interface ClassifyRouteOptions {
-  /** Classifier target from the routing table. */
+  /** 路由表中的 classifier target。 */
   target: ClassifierTarget;
-  /** Cancels the provider request when its owning turn is interrupted. */
+  /** 所属 turn 被中断时，取消 provider 请求。 */
   signal?: AbortSignal;
-  /** Receives the attributed usage for this call. */
+  /** 接收此次调用的归因 usage。 */
   onUsage?: (report: ClassifierUsageReport) => void;
-  /** Chat-path network seam for deterministic tests. */
+  /** 用于确定性测试的 chat-path 网络接缝。 */
   generate?: ClassifierGenerate;
 }
 
-/** A classifier choice that still names policy, not a concrete execution target. */
+/** 仍然只命名策略而非具体执行目标的 classifier 选择。 */
 export interface ClassifierDecision {
-  /** Existing route name selected from the supplied tier. */
+  /** 从给定 tier 中选出的现有路由名称。 */
   route: string;
-  /** One-sentence explanation returned by the chat classifier. */
+  /** chat classifier 返回的一句话解释。 */
   rationale?: string;
   /**
-   * Probability per route. The chat classifier never reports one; the field
-   * stays on the contract so router and CLI reporting need not branch on the
-   * classifier implementation.
+   * 每个路由的概率。chat classifier 不会返回概率；保留此字段是为了让 router 和 CLI 报告
+   * 不必根据 classifier 的实现分支。
    */
   probabilities?: Record<string, number>;
 }
@@ -119,7 +117,7 @@ function boundedHint(value: string | undefined): string {
   return boundedText(value) ?? "Not provided.";
 }
 
-/** Build the complete lean chat-classifier prompts without reading runtime state. */
+/** 构造完整的精简 chat-classifier prompt，不读取运行时状态。 */
 export function buildClassifierMessages(input: ClassifierInput): ClassifierMessages {
   const continuity = renderCacheContinuity(input.currentTarget);
 
@@ -128,19 +126,19 @@ export function buildClassifierMessages(input: ClassifierInput): ClassifierMessa
     prompt: dedent`
       ${renderClassifierRules(input.tierName, input.tier, input.guidance)}
 
-      CLASSIFICATION CONTEXT:
-      Trigger: ${input.trigger}
-      Images present: ${input.hasImages ? "yes" : "no"}
+      分类上下文：
+      触发原因：${input.trigger}
+      是否包含图像：${input.hasImages ? "是" : "否"}
       ${continuity}
-      Previous-turn hint: ${boundedHint(input.prevTurnHint)}
-      Current request / last-step delta: ${boundedHint(input.lastStepDelta)}
+      上一回合提示：${boundedHint(input.prevTurnHint)}
+      当前请求 / 上一步变化：${boundedHint(input.lastStepDelta)}
 
-      Pick exactly one name from AVAILABLE ROUTES and give a one-sentence rationale.
+      从可用路由中准确选择一个名称，并给出一句理由。
     `,
   };
 }
 
-/** Route choice from a chat model, forced through the `select_route` tool. */
+/** 通过 `select_route` 工具强制返回 route 的 chat model 选择。 */
 async function classifyWithChatModel(
   input: ClassifierInput,
   options: ClassifyRouteOptions,
@@ -166,7 +164,7 @@ async function classifyWithChatModel(
   });
 }
 
-/** Classify one tier in one model call and reject any route outside that tier. */
+/** 使用一次模型调用对一个 tier 进行分类，并拒绝该 tier 之外的任何 route。 */
 export async function classifyRoute(
   input: ClassifierInput,
   options: ClassifyRouteOptions,

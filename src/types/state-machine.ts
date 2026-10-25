@@ -3,123 +3,100 @@ import type { ThinkingLevel } from "@earendil-works/pi-ai";
 export const INTERRUPTED_STATE_MACHINE_STATE = "interrupted";
 
 /**
- * Durable state-machine definitions and runtime state.
+ * durable 状态机定义和运行时状态。
  *
- * A state machine models the high-level business process, not task execution.
- * There is one current business state at a time. The state-machine runner agent
- * sees the original prompt, current transition input, state history, and state
- * definitions, then decides which state should run next, whether the session should
- * wait, or whether a terminal state should finalize the state machine.
+ * 状态机建模高层业务流程，而不是 task 执行。任意时刻只有一个当前业务状态。状态机
+ * runner Agent 会看到原始 prompt、当前转换 input、状态 history 和状态定义，然后决定下一个
+ * 状态、Session 是否应等待，或终态是否应完成状态机。
  *
- * If a state needs fan-out, parallelism, or task-level workflow execution, that
- * belongs inside an agent or script state. The state machine only tracks the
- * business-level state transition.
- * Do not hardcode integrations such as email, GitHub, Slack, Calendly, or
- * webhooks into the engine. Any external system with an API or CLI is a bash
- * script away, and this engine can accept a few minutes of polling latency
- * instead of requiring realtime responsiveness.
+ * 如果某个状态需要 fan-out、并行或 task 级 workflow 执行，应放在 agent/script 状态内部。
+ * 状态机只跟踪业务层状态转换。不要将 email、GitHub、Slack、Calendly 或 webhook 等集成
+ * 硬编码进引擎。任何提供 API 或 CLI 的外部系统都可以通过 bash script 接入；引擎可以接受
+ * 几分钟的 polling 延迟，而不需要实时响应能力。
  *
- * Case 1: conference outreach state machine
+ * 案例 1：会议外联状态机
  *
- * User provides an email address. Agent/script states can enrich the prospect,
- * research the company, draft/send outreach, then a poll state can check whether
- * the prospect has replied or whether the next follow-up date has arrived.
+ * 用户提供 email 地址。Agent/script 状态可以丰富潜客信息、研究公司、起草/发送外联消息，
+ * 然后由 poll 状态检查潜客是否回复或下一次 follow-up 日期是否到达。
  *
- * The runner should:
+ * runner 应：
  *
- * 1. Start a StateMachineSession from a StateMachineDefinition.
- * 2. Enter an agent state for enrichment/research and record the output in the
- *    session history so the state machine can resume without repeating research.
- * 3. Enter a send-email script state and record the sent message details.
- * 4. The runner can choose a poll state. The runner runs one poll attempt,
- *    emits a sleep event if nothing changed, and relies on the outer layer to
- *    wake it later. A poll attempt can run a script or prompt an agent, and
- *    should return structured data only when there is something for the state
- *    machine to do next, such as:
- *    - prospect replied
- *    - follow-up due
- *    - meeting scheduled
- *    - outreach window expired
- * 5. When polling returns a reply payload, resume the session and ask an
- *    agent to classify it: interested, negative, ad hoc question, neutral, or
- *    unclear.
- * 6. The runner chooses the appropriate next state based on that classification:
- *    - interested -> send Calendly / schedule-meeting state
- *    - ad hoc question -> answer question, then return to waiting
- *    - negative -> terminal state: prospect_not_interested
- *    - unclear -> ask a follow-up or wait for more context
- * 7. When polling returns follow-up_due, send a follow-up if the session
- *    has not exceeded the cadence limit. For example: every 4 days for one
- *    month.
- * 8. End in one of the named terminal states:
- *    - meeting_scheduled
- *    - prospect_not_interested
- *    - negative_response
- *    - no_response_after_followups
+ * 1. 从 StateMachineDefinition 启动 StateMachineSession。
+ * 2. 进入 enrichment/research 的 agent 状态，并把输出记录到 Session history，使状态机
+ *    恢复时无需重复研究。
+ * 3. 进入发送邮件的 script 状态，并记录已发送消息的详情。
+ * 4. runner 可以选择 poll 状态。runner 执行一次 poll 尝试；没有变化时发送 sleep event，
+ *    依赖外层稍后唤醒。poll 尝试可以运行 script 或提示 Agent，只有状态机有下一步工作时
+ *    才应返回结构化数据，例如：
+ *    - 潜客已回复；
+ *    - follow-up 到期；
+ *    - 会议已安排；
+ *    - 外联窗口已过期。
+ * 5. polling 返回回复 payload 后，恢复 Session，并要求 Agent 将其分类为：感兴趣、否定、
+ *    临时问题、中立或不清楚。
+ * 6. runner 根据分类选择下一状态：
+ *    - interested -> send Calendly / schedule-meeting 状态；
+ *    - ad hoc question -> 回答问题，然后回到等待；
+ *    - negative -> 终态 `prospect_not_interested`；
+ *    - unclear -> 追问或等待更多上下文。
+ * 7. polling 返回 follow-up_due 后，如果 Session 未超过 cadence 限制则发送 follow-up，
+ *    例如每 4 天一次，持续一个月。
+ * 8. 在命名的终态之一结束：
+ *    - meeting_scheduled；
+ *    - prospect_not_interested；
+ *    - negative_response；
+ *    - no_response_after_followups。
  *
- * The state-machine types should support this by representing:
+ * 状态机类型应通过以下结构支持它：
  *
- * - durable session history
- * - agent/tool/script states whose outputs are available through state-machine history
- * - poll states, plus explicit waits for human input
- * - runner-agent decisions driven by full prompt, transition input, and history
- * - named terminal states richer than generic "completed" or "failed"
+ * - durable Session history；
+ * - 输出可通过状态机 history 获取的 agent/tool/script 状态；
+ * - poll 状态以及显式等待人工输入；
+ * - 由完整 prompt、转换 input 和 history 驱动的 runner-Agent decision；
+ * - 比通用 "completed" 或 "failed" 更丰富的命名终态。
  *
- * Case 2: development state machine
+ * 案例 2：开发状态机
  *
- * User provides a prompt. Agent/script states can create an isolated worktree,
- * run a dev agent, run a review agent, create a PR, poll until the PR is merged
- * or closed, then clean up the worktree.
+ * 用户提供 prompt。Agent/script 状态可以创建隔离 worktree、运行开发 Agent、运行 review
+ * Agent、创建 PR，poll 直到 PR 合并或关闭，然后清理 worktree。
  *
- * The runner should:
+ * runner 应：
  *
- * 1. Start a StateMachineSession from the user's prompt.
- * 2. Execute a script/tool state that creates a worktree and records its path in
- *    state-machine history.
- * 3. Execute an agent state that implements the requested code change inside the
- *    worktree.
- * 4. Execute a review agent state. The review can either approve, request fixes,
- *    or block the state machine.
- * 5. If fixes are requested, choose the dev-agent state again with the review
- *    feedback as input. The session history should preserve both attempts.
- * 6. When approved, execute a PR creation state and record PR number/URL.
- * 7. Enter a poll state. Each poll attempt can use gh, git, or any other
- *    CLI/API wrapper to inspect the PR state and return:
- *    - merged -> continue to cleanup and terminal state: merged
- *    - closed -> continue to cleanup and terminal state: closed
- * 8. Execute cleanup using the recorded worktree path.
+ * 1. 从用户 prompt 启动 StateMachineSession。
+ * 2. 执行创建 worktree 并将路径记录到状态机 history 的 script/tool 状态。
+ * 3. 执行在 worktree 内实现请求改动的 agent 状态。
+ * 4. 执行 review agent 状态。review 可以批准、要求修复或阻塞状态机。
+ * 5. 如果要求修复，带着 review feedback 再次选择 dev-agent 状态。Session history 应保留
+ *    两次尝试。
+ * 6. 获批后执行 PR 创建状态，并记录 PR 编号/URL。
+ * 7. 进入 poll 状态。每次 poll 可以使用 gh、git 或其他 CLI/API wrapper 检查 PR 状态并返回：
+ *    - merged -> 继续清理并进入终态 merged；
+ *    - closed -> 继续清理并进入终态 closed。
+ * 8. 使用记录的 worktree 路径执行清理。
  *
- * The state-machine types should support this by representing:
+ * 状态机类型应通过以下结构支持它：
  *
- * - a catalog of available business states
- * - retry/review loops without losing prior state history
- * - poll states that use sleep between attempts
- * - cleanup/finalizer states that run after terminal external outcomes
- * - terminal states such as merged, closed, failed_review, or cancelled
+ * - 可用业务状态目录；
+ * - 不丢失既有状态 history 的 retry/review 循环；
+ * - 两次尝试之间使用 sleep 的 poll 状态；
+ * - 外部终态结果后运行的清理/finalizer 状态；
+ * - merged、closed、failed_review 或 cancelled 等终态。
  *
- * In state-machine mode, the parent runner is still a normal pi agent with its
- * normal tools. The difference is prompting and routing: it should do as much
- * durable business-process work through the state machine as possible, while
- * still answering simple unrelated requests directly when that is the right
- * behavior. The parent runner dispatches the current state, records the
- * selected state's result, asks the runner agent what state should come next,
- * updates history, and emits protocol events.
+ * 状态机模式下，parent runner 仍是带普通工具的普通 pi Agent。区别在于 prompt 和路由：
+ * 它应尽可能通过状态机完成 durable 业务流程，同时在合适时直接回答简单的无关请求。parent
+ * runner dispatch 当前状态，记录所选状态的结果，询问 runner Agent 下一状态，更新 history，
+ * 并发送 protocol event。
  *
- * Agent states execute by running the runner in normal agent mode. The parent
- * runner is not a separate worker pool; the selected state owns execution, and
- * an agent state delegates that execution back to a turn-runner agent-mode turn.
- * This lets the same state machine start in the middle when the user's prompt
- * says prior work already happened, such as "I've already sent email, just wait
- * for response." The runner injects the original prompt and relevant history
- * automatically when constructing agent prompts; state definitions only describe
- * their own behavior. Human input is parent-owned: the machine parks without
- * executing work, and the parent asks any question needed to leave that park.
- * Polling remains explicit because the runner owns one poll attempt and emits
- * sleep until the next attempt.
+ * Agent 状态通过以普通 Agent 模式运行 runner 来执行。parent runner 不是独立的 worker pool；
+ * 所选状态拥有执行权，agent 状态将执行委派回 turn-runner 的 Agent-mode turn。因此同一状态机
+ * 可以从中间开始，例如用户说“我已经发过邮件，只需等待回复”。runner 构造 Agent prompt 时
+ * 自动注入原始 prompt 和相关 history；状态定义只描述自身行为。人工输入由 parent 拥有：机器
+ * 停放而不执行工作，parent 负责提出离开 park 所需的问题。polling 保持显式，因为 runner
+ * 拥有一次 poll 尝试，并在下一次尝试前发送 sleep。
  *
- * Example of templated script commands:
+ * 模板化 script command 示例：
  *
- * The parent runner can pass transition input when selecting a state:
+ * parent runner 选择状态时可以传入转换 input：
  *
  *   {
  *     kind: "script",
@@ -131,16 +108,14 @@ export const INTERRUPTED_STATE_MACHINE_STATE = "interrupted";
  *     command: "scripts/create-worktree.sh '{{ input.branchName }}'"
  *   }
  *
- * A later dev state or cleanup state can receive fresh input selected from
- * prior completion output:
+ * 后续开发或清理状态可以接收从前一状态完成输出中选取的新 input：
  *
  *   {
  *     kind: "script",
  *     command: "rm -rf '{{ input.worktreePath }}'"
  *   }
  *
- * A PR poll state can check through any CLI/API wrapper without the state
- * machine engine knowing about GitHub:
+ * PR poll 状态可以通过任意 CLI/API wrapper 检查，而不需要状态机引擎了解 GitHub：
  *
  *   {
  *     kind: "poll",
@@ -149,67 +124,53 @@ export const INTERRUPTED_STATE_MACHINE_STATE = "interrupted";
  *   }
  */
 
-/** User-authored state machine template. Runtime progress lives in StateMachineSession. */
+/** 用户编写的状态机模板。运行时进度存放在 StateMachineSession。 */
 export interface StateMachineDefinition {
-  /** Human-readable label for selection in CLIs/UIs. */
+  /** 在 CLI/UI 中用于选择时展示的可读标签。 */
   name: string;
   /**
-   * Routing guidance for the runner agent. This explains when this definition's
-   * set of states applies; if the user's request does not match this prompt, the
-   * selected state can be undefined and the runner can answer normally in agent mode.
+   * 给 runner Agent 的路由指导，说明这组状态适用于什么情况；如果用户请求不匹配此 prompt，
+   * 选中状态可以是 undefined，runner 可以在 Agent 模式下正常回答。
    */
   prompt: string;
-  /** Available states the runner agent can choose from, including terminal states. */
+  /** runner Agent 可以选择的状态列表，包括终态。 */
   states: StateMachineState[];
 }
 
-/**
- * Persisted execution state. The runner can stop after any state and later
- * continue from this session without redoing completed work.
- */
+/** 持久化的执行状态。runner 可以在任意状态后停止，并从此 Session 继续而不重复已完成工作。 */
 export interface StateMachineSession {
-  /** Current active definition. Required for resuming and dispatching currentState. */
+  /** 当前活动 definition；恢复和 dispatch currentState 时必需。 */
   definition: StateMachineDefinition;
-  /** Original user request that started the state machine. */
+  /** 启动状态机的原始用户请求。 */
   prompt: string;
   /**
-   * Current business state, selected by the runner agent.
+   * runner Agent 选择的当前业务状态。
    *
-   * The reserved value "interrupted" means runtime work was aborted before the
-   * state could finish. It is not a user-authored state name; the previous
-   * running state and its input remain available in history.
+   * 保留值 "interrupted" 表示 runtime 工作在状态完成前被中止。它不是用户编写的状态名；
+   * 先前运行状态及其 input 仍可在 history 中找到。
    */
   currentState?: string;
   /**
-   * Input supplied by the parent runner when it selected the current state.
-   * Persisted so sleeping scheduled states can resume with the same template values.
+   * parent runner 选择当前状态时提供的 input。持久化它，使睡眠中的计划状态能用相同的模板值恢复。
    */
   currentInput?: Record<string, unknown>;
   /**
-   * Compact progress counters for status questions. This stays separate from
-   * history so frequent poll sleeps do not spam the audit log.
+   * 用于状态查询的紧凑进度计数。与 history 分开，避免频繁的 poll sleep 刷屏审计日志。
    */
   progress?: StateMachineProgress;
-  /** Append-only audit log used for debugging, replay, and persistence. */
+  /** 用于调试、重放和持久化的只追加审计日志。 */
   history: StateMachineSessionEvent[];
-  /** Present only after a session reaches a named terminal state. */
+  /** 只有 Session 到达命名终态后存在。 */
   terminal?: StateMachineTerminalResult;
   /**
-   * Set once the parent runner has run its acknowledgment turn for the
-   * current `terminal`. The state-machine tools end the parent's
-   * prompt loop with `terminate: true`, so a turn that drives the
-   * state machine to a terminal status leaves the parent's transcript
-   * without any natural acknowledgment of the outcome — the turn
-   * runner closes that gap by running one final parent prompt as soon
-   * as a terminal is recorded (see `runStateMachineTerminalAcknowledgment`
-   * in turn-runner.ts).
+   * parent runner 为当前 `terminal` 运行 acknowledgment turn 后设置。状态机工具会以
+   * `terminate: true` 结束 parent prompt loop，因此驱动状态机进入终态的 turn 不会自然地在
+   * parent transcript 中确认结果；turn runner 会在记录终态后立即运行一次最终 parent prompt，
+   * 补上这一环（见 turn-runner.ts 中的 `runStateMachineTerminalAcknowledgment`）。
    *
-   * The flag is per-session: it prevents the same `session.terminal`
-   * from being re-acknowledged if the parent re-routes back into the
-   * turn loop during the acknowledgment pass. A new state machine
-   * created during the acknowledgment turn lives on a fresh session
-   * built by `createStateMachineSession` and gets its own
-   * acknowledgment when it terminates.
+   * 此标记按 Session 生效：如果 parent 在 acknowledgment pass 中重新路由回 turn loop，
+   * 它可防止同一个 `session.terminal` 被重复确认。acknowledgment turn 中创建的新状态机
+   * 会由 `createStateMachineSession` 建立新的 Session，并在自身终止时获得独立确认。
    */
   terminalAcknowledged?: boolean;
   createdAt: number;
@@ -225,241 +186,203 @@ export type StateMachineState =
   | StateMachineTerminalState;
 
 export interface StateMachineProgress {
-  /** Per-state counters keyed by state name for compact status reporting. */
+  /** 按状态名索引的计数，用于紧凑的进度查询。 */
   states: Record<string, StateMachineStateProgress>;
 }
 
 export interface StateMachineStateProgress {
-  /** State kind from the active definition when the progress entry was updated. */
+  /** 活动 definition 更新进度条目时记录的状态 kind。 */
   kind?: StateMachineState["kind"];
-  /** Number of times the parent selected this state. */
+  /** parent 选择此状态的次数。 */
   runs: number;
-  /** Number of times this state emitted sleep while waiting for a later wake. */
+  /** 此状态在等待下一次 wake 时发送 sleep 的次数。 */
   sleeps: number;
-  /** Scheduled wake time from the latest sleep, cleared when the state runs again. */
+  /** 最近一次 sleep 的计划 wake 时间；状态再次运行时清除。 */
   nextWakeAt?: number;
   /**
-   * Timestamp of the latest `state_started` for this state. Mirrors what
-   * `history` records so elapsed-time checks (e.g. poll `timeoutMs`)
-   * keep working even after old `state_started` entries fall off the
-   * capped history.
+   * 此状态最近一次 `state_started` 的时间戳。镜像 history 中的记录，使 elapsed-time 检查
+   *（例如 poll `timeoutMs`）即使旧的 `state_started` 条目从有上限的 history 中移除后仍能工作。
    */
   startedAt?: number;
 }
 
 export interface StateMachineBaseState {
-  /** Name shown in status output and used by the runner when choosing a state. */
+  /** 状态名，在 status 输出中展示，并供 runner 选择状态时使用。 */
   name: string;
-  /** Helps the runner agent understand when this state is appropriate. */
+  /** 帮助 runner Agent 理解何时适合选择此状态。 */
   when?: string;
   /**
-   * Optional JSON Schema for the input the parent runner must provide when
-   * selecting this state. The runner validates transition input before executing
-   * the state and exposes it to prompt/script templates as `input`.
+   * parent runner 选择此状态时必须提供的 input 的可选 JSON Schema。runner 会在执行前校验
+   * 转换 input，并将其以 `input` 暴露给 prompt/script 模板。
    */
   inputSchema?: Record<string, unknown>;
 }
 
-/** Runs an agent. The runner injects original prompt/history outside this state config. */
+/** 运行 Agent。runner 会在此状态配置之外注入原始 prompt/history。 */
 export interface StateMachineAgentState extends StateMachineBaseState {
   kind: "agent";
   /**
-   * User prompt sent to the sub-agent. The runner renders this as a template
-   * using the transition input provided when the parent runner selected this
-   * state.
-   */
+ * 发送给子 Agent 的用户 prompt。parent runner 选择此状态时，会使用转换 input 将其渲染为模板。
+ */
   prompt: string;
   /**
-   * Optional system prompt appended to the runner's base system prompt for this
-   * sub-agent only. Use this for durable role or behavior instructions; dynamic
-   * state input belongs in `prompt`.
-   */
+ * 只追加到此子 Agent 基础 system prompt 的可选 system prompt。用于持久化角色或行为指令；
+ * 动态状态 input 应放在 `prompt` 中。
+ */
   systemPrompt?: string;
   /**
-   * Optional skill allowlist for this sub-agent. When set, only these discovered
-   * or explicitly configured skills are injected into the sub-agent system
-   * prompt.
-   */
+ * 此子 Agent 的可选 skill allowlist。设置后只将这些已发现或显式配置的 skill 注入子 Agent
+ * system prompt。
+ */
   allowedSkills?: string[];
   /**
-   * Working directory for this sub-agent's coding tools (bash, read, write,
-   * edit). Defaults to the state-machine session cwd. Set this when an agent
-   * state should operate on a different repository or subdirectory than the
-   * parent runner.
-   */
+ * 此子 Agent 编程工具（bash、read、write、edit）的工作目录。默认使用状态机 Session cwd。
+ * 如果状态应在不同 repository 或子目录中工作，请设置这里。
+ */
   cwd?: string;
   /**
-   * Exact model for this sub-agent, as shorthand (e.g. "opus-5.5") or
-   * provider:modelId. When unset the sub-agent inherits the parent runner's
-   * model. Intentionally NOT exposed on create_state_machine_definition or on
-   * select_state_machine_state's override: the orchestrating model does not
-   * know the available model catalog, so it must not pick a model. This is set
-   * by the user through the UI, which can present the real model list. An
-   * unknown value fails at resolveModelName the same way a bad CLI --model
-   * does.
-   */
+ * 此子 Agent 的精确 model，可以是 shorthand（例如 "opus-5.5"）或 provider:modelId。
+ * 未设置时继承 parent runner 的 model。它有意不暴露给 create_state_machine_definition 或
+ * select_state_machine_state 的 override：编排模型不知道可用 model catalog，不应自行选择 model。
+ * 此值由 UI 设置，UI 可以展示真实 model 列表。未知值会像错误的 CLI --model 一样在
+ * resolveModelName 处失败。
+ */
   model?: string;
   /**
-   * Reasoning effort for this sub-agent. Same UI-only contract as `model`:
-   * absent from the tool schemas so the orchestrating model cannot set it, and
-   * written by the UI instead. Inherits the parent runner's thinking level when
-   * unset.
-   */
+ * 此子 Agent 的 reasoning effort。与 `model` 采用相同的 UI-only 契约：不出现在工具 schema 中，
+ * 因此编排模型无法设置它，由 UI 写入。未设置时继承 parent runner 的 thinking level。
+ */
   thinkingLevel?: ThinkingLevel;
   /**
-   * Whether this sub-agent starts with a copy of the parent runner's
-   * conversation context instead of a fresh, empty transcript.
-   *
-   * When `false` (the default, and the historical behavior), the sub-agent
-   * starts clean: it sees only the `prompt` rendered for this state, the
-   * worker-identity system-prompt layer, and the transition `input` you pass.
-   * Use this for narrow, self-contained tasks where a crisp prompt carries
-   * everything the sub-agent needs and prior context would distract or bias.
-   *
-   * When `true`, the runner seeds the sub-agent with a verbatim copy of the
-   * parent runner's full context — the parent's system prompt AND its message
-   * history — so the sub-agent inherits prior discussion, decisions,
-   * constraints, and tool history. To keep this economical the fork preserves
-   * the parent's exact cached prefix (same system prompt + same leading
-   * messages), and everything state-specific — the worker-identity layer, the
-   * per-state `systemPrompt`, and the state's own `prompt` — is delivered as a
-   * new tail user turn, the only uncached part. Use this when the task depends
-   * on prior thread decisions or user preferences that would be tedious or
-   * lossy to restate in the state prompt, or when continuing a complex thread.
-   *
-   * The forked transcript is transient: it is not persisted into the
-   * state-machine session history (only the state's compact final output is),
-   * so forking does not bloat the durable session.
-   */
+ * 此子 Agent 是否从 parent runner 对话上下文的副本开始，而不是使用全新的空 transcript。
+ *
+ * `false`（默认，也是历史行为）时，子 Agent 只看到本状态渲染后的 `prompt`、worker identity
+ * system-prompt 层和传入的转换 `input`。适合范围明确、自包含的任务，此时清晰的 prompt 已足够，
+ * 既有上下文反而会分散注意力或造成偏置。
+ *
+ * `true` 时，runner 用 parent runner 完整上下文的逐字副本为子 Agent 提供历史，包括 parent
+ * system prompt 和 message history，使子 Agent 继承此前讨论、决定、约束和工具 history。为
+ * 控制成本，fork 保留 parent 的精确缓存前缀（相同 system prompt 和前导 messages），所有
+ * 状态专属内容——worker identity 层、该状态的 `systemPrompt` 和自身 `prompt`——作为唯一
+ * 未缓存的新尾部 user turn 发送。任务依赖先前 thread 决定或用户偏好，且通过状态 prompt
+ * 重述会繁琐或有损时，才使用它。
+ *
+ * fork transcript 是临时的：不会写入状态机 Session history（只写入状态的紧凑最终输出），
+ * 因此 fork 不会让 durable Session 膨胀。
+ */
   forkContext?: boolean;
 }
 
-/** Runs a shell command. This is the generic integration primitive. */
+/** 运行 shell command；这是通用的集成原语。 */
 export interface StateMachineScriptState extends StateMachineBaseState {
   kind: "script";
   /**
-   * Shell command used for integrations, setup, cleanup, and deterministic
-   * checks. The runner renders this as a template using transition input; keep
-   * state-machine definitions serializable instead of storing executable
-   * functions here.
-   */
+ * 用于集成、初始化、清理和确定性检查的 shell command。runner 使用转换 input 将它渲染为
+ * 模板；状态机 definition 应保持可序列化，不要在这里存储可执行函数。
+ */
   command: string;
-  /** Working directory for the command. Defaults to the state-machine session cwd. */
+  /** command 的工作目录；默认使用状态机 Session cwd。 */
   cwd?: string;
-  /** Kills the command if it exceeds this runtime. */
+  /** command 超过此运行时会被终止。 */
   timeoutMs?: number;
-  /** Exit codes treated as success. Defaults to [0]. */
+  /** 被视为成功的退出码，默认为 [0]。 */
   successCodes?: number[];
 }
 
-/** Performs one external check, then either records data or sleeps until the next attempt. */
+/** 执行一次外部检查，然后记录数据或睡眠到下一次尝试。 */
 export interface StateMachinePollState extends StateMachineBaseState {
   kind: "poll";
   /**
-   * Recurring delay between external check attempts. Accepts either a
-   * human-readable duration string parsed by the `ms` package (e.g. `"30s"`,
-   * `"15m"`, `"3h"`, `"5d"`) or a raw number of milliseconds.
-   */
+ * 下一次外部检查尝试之间的重复等待时间。接受 `ms` package 解析的人类可读时长字符串
+ *（例如 `"30s"`、`"15m"`、`"3h"`、`"5d"`），也接受原始毫秒数。
+ */
   intervalMs: number | string;
-  /** Maximum time the state machine can remain in this poll state before failing the session. */
+  /** 状态机在此 poll 状态中最多保持多久，超时后 Session 失败。 */
   timeoutMs?: number;
   /**
-   * Runs once per poll attempt. The script signals "found a result" by
-   * exiting with a code in `successCodes`; any other exit code is treated
-   * as "keep polling" and the runner sleeps for `intervalMs` before the
-   * next attempt. Stdout is captured and surfaced as the state output
-   * (and parsed as JSON when possible for convenience), but the parse
-   * result does NOT affect whether the poll completes — only the exit
-   * code does.
-   */
+ * 每次 poll 尝试运行一次。script 以 `successCodes` 中的退出码表示“发现结果”；其他退出码
+ * 视为“继续 polling”，runner 会在 `intervalMs` 后 sleep 再尝试。stdout 会被捕获并作为
+ * 状态输出暴露（可行时也解析为 JSON），但解析结果不会影响 poll 是否完成——只有退出码决定。
+ */
   command: string;
-  /** Working directory for the command. Defaults to the state-machine session cwd. */
+  /** command 的工作目录；默认使用状态机 Session cwd。 */
   cwd?: string;
-  /** Exit codes that mean this poll found a result. Defaults to [0]. */
+  /** 表示此次 poll 发现结果的退出码，默认为 [0]。 */
   successCodes?: number[];
 }
 
-/** Sleeps until a future time, then lets the parent choose the next state. */
+/** 睡眠到未来某个时间，然后让 parent 选择下一状态。 */
 export interface StateMachineTimerState extends StateMachineBaseState {
   kind: "timer";
   /**
-   * Absolute time when this timer state should complete. Accepts either an
-   * ISO 8601 date string (e.g. `"2026-05-24T18:00:00Z"`) or a raw Unix-epoch
-   * millisecond number. Mutually exclusive with `wakeAfterMs` — exactly one of
-   * the two must be set.
-   */
+ * 此 timer 状态完成的绝对时间。接受 ISO 8601 日期字符串（例如 `"2026-05-24T18:00:00Z"`）
+ * 或 Unix epoch 毫秒数。与 `wakeAfterMs` 互斥，二者必须且只能设置一个。
+ */
   wakeAt?: number | string;
   /**
-   * Relative duration measured from the moment the parent selects this timer
-   * state, after which the timer should complete. Accepts either a
-   * human-readable duration string parsed by the `ms` package (e.g. `"3h"`,
-   * `"5d"`) or a raw number of milliseconds. Useful when the wait length is
-   * known up front but the absolute wake time is not (for example reusable
-   * definitions, or transitions where the start time is decided by the parent
-   * at selection time). Mutually exclusive with `wakeAt`.
-   */
+ * 从 parent 选择此 timer 状态的时刻开始计算的相对时长，经过后 timer 完成。接受由 `ms`
+ * package 解析的人类可读时长字符串（例如 `"3h"`、`"5d"`）或原始毫秒数。当等待长度
+ * 预先已知但绝对 wake 时间未知时很有用（例如可复用 definition，或由 parent 在选择时决定
+ * 开始时间的转换）。与 `wakeAt` 互斥。
+ */
   wakeAfterMs?: number | string;
 }
 
-/** Holds the machine without execution or a scheduled wake while the parent drives. */
+/** 进入后让机器停放，不执行工作，也不安排 wake，由 parent 驱动。 */
 export interface StateMachineParkState extends StateMachineBaseState {
   kind: "park";
 }
 
-/** Finalizes the session when reached. Terminal outcomes are just state machine states. */
+/** 到达后结束 Session。终态结果本身也是状态机状态。 */
 export interface StateMachineTerminalState extends StateMachineBaseState {
   kind: "terminal";
-  /** Maps this named outcome to the session's lifecycle status. */
+  /** 将此命名结果映射到 Session lifecycle status。 */
   status: "completed" | "failed" | "cancelled";
-  /** Optional final explanation shown to users and recorded in history. */
+  /** 展示给用户并记录到 history 的可选最终说明。 */
   reason?: string;
 }
 
 export interface StateMachineTerminalResult {
   /**
-   * Names the terminal state that finalized the session. For a runtime failure
-   * this is the state that errored (the poll/agent/script state), not a
-   * terminal state in the definition.
+   * 使 Session 结束的终态名称。发生 runtime failure 时，这是出错的状态（poll/agent/script），
+   * 而不是 definition 中的 terminal state。
    */
   state: string;
   /**
-   * The session's final lifecycle status. `completed`/`failed`/`cancelled` come
-   * from a terminal state the agent deliberately selected. `error` is
-   * runtime-only: it is never an authored terminal status (the agent cannot
-   * select it) and is set solely by the runner when the machine crashes — a
-   * poll timeout, an unknown/invalid selected state, an agent/script state
-   * failure, the misconfigured-poll gate, or exhausted protocol-violation
-   * retries. Only an `error` outcome fails the turn; the other three are
-   * successful turn outcomes whose meaning lives in `state`/`reason`.
+   * Session 的最终 lifecycle status。`completed`/`failed`/`cancelled` 来自 Agent 有意选择的
+   * terminal state。`error` 仅供 runtime 使用：它永远不是用户编写的 terminal status（Agent
+   * 不能选择它），只在机器崩溃时由 runner 设置——包括 poll timeout、未知/无效选择的状态、
+   * agent/script 状态失败、配置错误的 poll gate 或 protocol-violation 重试耗尽。只有 `error`
+   * 结果会使 turn 失败；其他三个是成功的 turn 结果，其含义由 `state`/`reason` 表达。
    */
   status: StateMachineTerminalState["status"] | "error";
-  /** Optional final explanation, often generated by the runner. */
+  /** 可选最终说明，通常由 runner 生成。 */
   reason?: string;
 }
 
-/** Bounded evidence of immediate work constructed by the executor, before it is started. */
+/** executor 构造但尚未启动的即时工作证据，范围受限。 */
 export interface StateMachineExecutionReceipt {
-  /** Task identity shared by the accepted decision and actual start. */
+  /** accepted decision 与实际启动共享的 task identity。 */
   id: string;
   state: string;
   kind: "agent" | "script";
-  /** SHA-256 of canonical effective work, excluding task identity and timing. */
+  /** canonical effective work（不含 task identity 和 timing）的 SHA-256。 */
   fingerprint: string;
-  /** Absolute working directory used to construct worker tools or the shell. */
+  /** 构造 worker tools 或 shell 时使用的绝对工作目录。 */
   cwd: string;
   forkContext: boolean;
-  /** Supplied top-level input keys; keys alone do not imply delivery to a worker. */
+  /** 提供的顶层 input key；仅有 key 不代表它们已传递给 worker。 */
   suppliedInputKeys: string[];
-  /** Top-level input keys referenced by the prompt/command template. */
+  /** prompt/command 模板引用的顶层 input key。 */
   renderedInputKeys: string[];
-  /** Whether this selection persisted an override into the definition. */
+  /** 此次选择是否将 override 持久化到 definition。 */
   persistOverride: boolean;
-  /** Bounded actual prompt or command; fingerprint covers the complete work. */
+  /** 有界的实际 prompt 或 command；fingerprint 覆盖完整工作。 */
   preview: string;
   previewTruncated: boolean;
-  /** Digest of the context actually inherited by a forked worker. */
+  /** forked worker 实际继承的 context digest。 */
   inheritedContextHash?: string;
-  /** Most recent settled execution of this state when effective work is identical. */
+  /** effective work 相同的情况下，此状态最近一次 settled execution。 */
   unchangedFrom?: { id: string; outcome: "completed" | "failed" | "interrupted" };
 }
 
@@ -473,7 +396,7 @@ export type StateMachineSessionEvent =
     }
   | {
       type: "state_started";
-      /** Present only after immediate work was constructed and its task admitted. */
+    /** 只有即时工作构造完成且 task 被接纳后存在。 */
       execution?: StateMachineExecutionReceipt;
       timestamp: number;
       state: string;
@@ -489,11 +412,9 @@ export type StateMachineSessionEvent =
       output?: { assistantText?: string } | { stdout: string; stderr: string };
     }
   | {
-      // Emitted when select_state_machine_state persists an override into
-      // the active definition (decision.persistOverride !== false). Captures
-      // the merged state so anyone replaying history can see when and how
-      // the definition drifted from its original create_state_machine_definition
-      // shape.
+      // select_state_machine_state 持久化 override 到活动 definition 时发送
+      //（decision.persistOverride !== false）。记录合并后的 state，使 replay history 的人可以看到
+      // definition 何时、如何偏离原始 create_state_machine_definition 形状。
       type: "state_definition_updated";
       timestamp: number;
       state: string;
@@ -501,10 +422,8 @@ export type StateMachineSessionEvent =
     }
   | { type: "state_machine_completed"; timestamp: number; terminal: StateMachineTerminalResult }
   | {
-      // Recorded when a finished session is resumed (see
-      // recordStateMachineReactivated for when this is legal). `state` is the
-      // resumed state's name; `priorTerminal` preserves the outcome that was
-      // cleared so replay still shows the completed→running transition.
+      // 已完成 Session 恢复时记录（何时合法见 recordStateMachineReactivated）。`state` 是恢复状态
+      // 的名称；`priorTerminal` 保留被清除的结果，使 replay 仍显示 completed→running 转换。
       type: "state_machine_reactivated";
       timestamp: number;
       state: string;

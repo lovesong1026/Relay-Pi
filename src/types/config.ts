@@ -4,97 +4,84 @@ import type { ObservationalMemorySettingsInput } from "./memory.js";
 import type { TurnMode, TurnOptions } from "./protocol.js";
 import type { AutoStateCompactionOptions } from "../turn-runner/state-compaction.js";
 
-/** Directly mirrors pi-coding-agent's loadSkills options. */
+/** 直接镜像 pi-coding-agent 的 loadSkills 选项。 */
 export type SkillDiscoveryOptions = Partial<Parameters<typeof loadSkills>[0]>;
 
-/** Foreground work may run this long before yielding a still-running result. */
+/** 前台工作最多运行这么久，之后让出并返回仍在运行的结果。 */
 export const DEFAULT_TASK_WAIT_BUDGET_MS = 120_000;
 
 export interface TurnRunnerConfig extends TurnOptions {
   /**
-   * Session that owns this runner. Plumbed into newly-written observations
-   * so the memory loader can split them into the local layer (current
-   * session) and the global layer (every other session). Sub-agents
-   * spawned for state-machine work derive their own id from this one
-   * (`<parent>:sub:<taskId>`) so their scratch observations stay scoped
-   * to the sub-agent and do not pollute the parent's local layer.
+   * 拥有此 runner 的 Session。它会写入新生成的观察记录，使 memory loader 能将记录拆分
+   * 为本地层（当前 Session）和全局层（其他所有 Session）。为状态机工作创建的子 Agent
+   * 会从此 id 派生自己的 id（`<parent>:sub:<taskId>`），因此其临时观察记录仍限定在子 Agent
+   * 内，不会污染 parent 的本地层。
    *
-   * Optional only because direct TurnRunner construction (tests, one-shot
-   * tools) may not have a session. Real CLI/Session callers always set it.
+   * 只有直接构造 TurnRunner（测试、一次性工具）时可能没有 Session，因此该字段可选。
+   * 真正的 CLI/Session 调用方始终会设置它。
    */
   sessionId?: string;
   /**
-   * Target ceiling, in tokens, for the actor model's per-turn input. The
-   * local-session memory budgets (raw-message compaction trigger, raw-tail
-   * buffer, reflection trigger and buffer) are derived from this single
-   * number via fixed ratios in `deriveMemoryBudgets`; see
-   * `MEMORY_BUDGET_RATIOS` in `src/memory/observational.ts` for the table.
-   * The cross-session global pack uses a fixed cap
-   * (`GLOBAL_CONTEXT_TOKEN_BUDGET`) instead of scaling with this value.
+   * actor model 每个 turn 输入的 token 目标上限。local-session memory 预算（原始消息压缩
+   * 触发点、原始尾部缓冲区、反思触发点和缓冲区）通过 `deriveMemoryBudgets` 中的固定
+   * 比例从这一个数值派生；比例表见 `src/memory/observational.ts` 中的
+   * `MEMORY_BUDGET_RATIOS`。
+   * cross-session 全局 pack 使用固定上限（`GLOBAL_CONTEXT_TOKEN_BUDGET`），不随此值缩放。
    *
-   * Defaults to 200_000. The runner clamps the resolved value to
-   * `min(effectiveContext, model.contextWindow)` at use-time so a user
-   * value larger than the model's hard window silently caps at the window
-   * instead of overflowing.
+   * 默认为 200_000。运行时会将解析后的值限制为
+   * `min(effectiveContext, model.contextWindow)`，因此大于模型硬窗口的用户值会静默
+   * 截断到窗口上限，而不会造成溢出。
    */
   effectiveContext?: number;
   /**
-   * Wall-clock budget for foreground task work before the runner returns a
-   * still-running result and lets that work continue in the background.
-   * Expiry never cancels the task. Defaults to 120,000 ms (two minutes).
+   * 前台 task 工作在 runner 返回仍在运行的结果、让工作继续在后台前所允许的墙上时钟预算。
+   * 到期不会取消 task。默认为 120,000 ms（两分钟）。
    */
   taskWaitBudgetMs?: number;
   memory?: ObservationalMemorySettingsInput;
   /**
-   * PGlite database directory for durable observational memories.
-   * SessionManager defaults this to
-   * `~/.relay-pi/memory.db`; pass `false` to keep memories in process only.
+   * 持久化观察记忆使用的 PGlite 数据库目录。
+   * SessionManager 默认使用 `~/.relay-pi/memory.db`；传入 `false` 可让记忆只存在于进程内。
    */
   memoryDbPath?: string | false;
   /**
-   * Curated memory-store directories pinned into the observation prefix.
-   * Omit to discover stores from `cwd` toward the filesystem root, nearest
-   * first; provide an ordered list to replace discovery, or `false` to keep
-   * file-backed memory out of this runner entirely.
+   * 固定写入 observation prefix 的整理后 memory-store 目录。
+   * 省略时会从 `cwd` 向文件系统根目录发现 store，并按距离从近到远排列；提供有序列表
+   * 可替换发现结果，传入 `false` 则让此 runner 完全不使用文件记忆。
    */
   memoryStores?: string[] | false;
   cwd?: string;
-  /** Default mode for TurnRunner.turn. "auto" lets the runner classify each prompt. */
+  /** TurnRunner.turn 的默认 mode。"auto" 会让 runner 对每个 prompt 进行分类。 */
   mode?: TurnMode;
   guardrails?: GuardrailConfig[];
   systemInstructions?: string;
   /**
-   * Files loaded from `cwd` and appended to the base system prompt.
+   * 从 `cwd` 加载并追加到基础 system prompt 的文件。
    *
-   * Defaults to `["AGENTS.md"]` so repository-local agent guidance is included
-   * automatically. Set to `[]` to disable file loading, or provide an explicit
-   * ordered list to replace the default.
+   * 默认值为 `["AGENTS.md"]`，因此会自动包含仓库本地的 Agent 指导。设置为 `[]` 可禁用
+   * 文件加载，或提供显式有序列表替换默认值。
    */
   systemPromptFiles?: string[];
   skills?: Skill[];
   /**
-   * Controls filesystem skill discovery. Defaults search both Relay Pi-specific
-   * `.relay-pi/skills` and standard `.agents/skills` directories in `cwd` and the
-   * user's home directory; set `includeDefaults: false` to rely only on
-   * explicit `skills` or `skillPaths`.
+   * 控制文件系统 skill 发现。默认会在 `cwd` 和用户 home 目录中同时搜索 Relay Pi 专用的
+   * `.relay-pi/skills` 及标准 `.agents/skills` 目录；设置 `includeDefaults: false` 后，
+   * 只使用显式的 `skills` 或 `skillPaths`。
    */
   skillDiscovery?: SkillDiscoveryOptions;
   /**
-   * Auto state compaction. When enabled, the runner caps emitted/returned
-   * `TurnState` at `maxBytes` (default 100 MB) by evicting the oldest agent
-   * messages first. Applied inside `snapshotState`, so every event, terminal
-   * payload, and `getState()` return value is already trimmed before it
-   * leaves the runner. Down-stream persistence (e.g. `state.json`) inherits
-   * the cap for free.
+   * 自动状态压缩。启用后，runner 会通过优先淘汰最早的 Agent 消息，将发出/返回的
+   * `TurnState` 限制在 `maxBytes`（默认 100 MB）以内。它在 `snapshotState` 内应用，
+   * 因此每个 event、terminal payload 和 `getState()` 返回值离开 runner 前都已裁剪。
+   * 下游持久化（例如 `state.json`）会自动继承这一上限。
    *
-   * - `true` or omitted enables the cap at `DEFAULT_STATE_MAX_BYTES`.
-   * - `false` disables compaction entirely.
-   * - Pass `{ maxBytes }` to override the ceiling for this runner.
+   * - `true` 或省略：以 `DEFAULT_STATE_MAX_BYTES` 启用上限。
+   * - `false`：完全禁用压缩。
+   * - 传入 `{ maxBytes }`：覆盖此 runner 的上限。
    *
-   * On by default with a 100 MB ceiling — `state.json` is otherwise unbounded
-   * and a runaway transcript will eventually wedge persistence. Opt out per-
-   * runner (`autoStateCompaction: false`) when a test or short-lived session
-   * needs the full transcript verbatim.
+   * 默认启用，上限为 100 MB——否则 `state.json` 没有上限，失控的 transcript 最终会卡死
+   * 持久化。如果测试或短生命周期 Session 需要逐字保留完整 transcript，可按 runner 设置
+   *（`autoStateCompaction: false`）退出压缩。
    */
   autoStateCompaction?: AutoStateCompactionOptions | boolean;
 }

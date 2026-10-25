@@ -53,11 +53,11 @@ import { installShutdownHandlers } from "./shutdown.js";
 export interface TrainCommandOptions {
   folder: string;
   slug: string;
-  /** Undefined means "resolve at run time via resolveCliModel". */
+  /** undefined 表示“运行时通过 resolveCliModel 解析”。 */
   model: string | undefined;
-  /** Explicit backend flags; empty means skills-style discovery at execution time. */
+  /** 显式 backend 标志；为空时在执行时采用 skills 风格的发现。 */
   sourceFlags: MemorySourceFlags;
-  /** Compatibility projection for callers that inspect a single selected DB. */
+  /** 供检查单个选中 DB 的调用方使用的兼容投影。 */
   dbPath: string;
   waitBudgetMs?: number;
 }
@@ -65,16 +65,15 @@ export interface TrainCommandOptions {
 interface TrainCommandIO {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream;
-  /** Working directory used for relative paths and flagless source discovery. */
+  /** 用于相对路径和无 flag 的 source discovery 的工作目录。 */
   cwd?: string;
-  /** Deterministic synthesis seam for CLI integration tests. */
+  /** CLI 集成测试使用的确定性 synthesis 接缝。 */
   synthesize?: typeof runAgentSynthesis;
 }
 
 /**
- * Lowercase a base name and collapse anything that isn't a-z/0-9 into
- * single dashes so the slug can serve as a tag (`train:<slug>`) and a
- * folder name without quoting.
+ * 将基础名称转为小写，并把所有不是 a-z/0-9 的内容折叠为单个连字符，
+ * 使 slug 可以作为 tag（`train:<slug>`）和无需引号的目录名。
  */
 function sanitizeSlug(name: string): string {
   return name
@@ -92,9 +91,9 @@ export function parseTrainArgs(
   requireSingleExplicitWriteTarget(sourceArgs.flags);
   let folder: string | undefined;
   let slugOverride: string | undefined;
-  // Default model is resolved at run time via `resolveCliModel`, mirroring
-  // `relay-pi run`'s actor model selection. Env var `RELAY_PI_MODEL` is honored by
-  // the resolver itself; we keep `--model` as the user's explicit override.
+  // 默认模型在运行时通过 `resolveCliModel` 解析，与 `relay-pi run` 的 actor
+  // 模型选择保持一致。环境变量 `RELAY_PI_MODEL` 由 resolver 自己处理；
+  // 保留 `--model` 作为用户的显式覆盖。
   let model: string | undefined;
   let waitBudgetMs: number | undefined;
 
@@ -155,65 +154,42 @@ interface QueriedRow {
 }
 
 /**
- * Verbatim system prompt for the synthesis sub-agent. The agent's cwd is
- * the corpus folder, so file-reading tools resolve relative paths against
- * it directly.
+ * 发送原样的 system prompt 给 synthesis 子 Agent。子 Agent 的 cwd 是语料目录，
+ * 因此文件读取工具会直接以它为相对路径基准。
  */
 const TRAIN_SYSTEM_PROMPT = dedent`
-  You are synthesizing a project corpus into a single durable memory
-  observation.
+  你的任务是将一个项目语料整理成一份可长期使用的记忆记录。
 
-  The working directory IS the corpus. Read every file that looks
-  substantive — markdown, plain text, CSVs, PDFs, spreadsheets, images,
-  source code. Skip lockfiles, build artifacts, node_modules, .git, and
-  other obvious noise. Use your file-reading tools (read, ls, grep) to
-  explore until you understand what this corpus is about.
+  当前工作目录就是语料目录。阅读所有有实质内容的文件，包括 Markdown、纯文本、CSV、PDF、电子表格、图片和源代码。跳过锁文件、构建产物、node_modules、.git 及其他明显无关的内容。使用文件读取工具（read、ls、grep）持续探索，直到理解这份语料的主题。
 
-  Extract EXHAUSTIVELY, not as a summary. A weaker reader of this corpus
-  tends to keep the headline claim and silently drop the specifics fused
-  to it — that is the failure to avoid. As you read, preserve EVERY
-  load-bearing concrete fact:
-    - Every number, quantity, percentage, version, and date — including
-      the second and third value in any enumeration (if a fact says
-      "X across A, B, and C", keep A, B, AND C, never just A).
-    - Every named feature, product, option, tool, attribute, and API —
-      by its exact name, not a generic paraphrase.
-    - Every member of a list, and the qualifier attached to each member
-      (if every option "supports both X and Y", state that for the set).
-    - Exact syntax, identifiers, code values, and config snippets as
-      written (e.g. a property name and its literal example value).
-  Never collapse an enumeration to its first item and never generalize a
-  specific into a category. When in doubt, include the detail.
+  请穷尽提取信息，不要只做摘要。较弱的阅读者往往只保留核心结论，却悄悄丢掉与结论关联的具体细节；必须避免这种情况。保留每一项有决定作用的具体事实：
+    - 保留每个数字、数量、百分比、版本和日期，包括枚举中的第二项、第三项及后续项目（如果事实包含 A、B 和 C，就必须保留 A、B、C，不能只写 A）。
+    - 按原名保留每个具名功能、产品、选项、工具、属性和 API，不要泛化改写。
+    - 保留列表的每个成员及其限定条件（如果每个选项都支持 X 和 Y，就要明确说明这一点适用于列表中的所有选项）。
+    - 按原样保留精确语法、标识符、代码值和配置片段，例如属性名称及其字面示例值。
+  不要把枚举缩减为第一项，也不要把具体内容泛化为类别。有疑问时，优先保留细节。
 
-  Write the synthesis as GitHub-flavored markdown:
-    - Sections start at \`##\`. NEVER use a top-level \`#\` — the headline
-      field is the title, and a heading repeating it is duplication.
-    - Bullets for enumerations, so the members you were told to preserve
-      stay individually visible instead of dissolving into a sentence.
-    - A table when the corpus is genuinely tabular (a plan matrix, a
-      limits grid); prose when it is not.
-    - Fenced code for literal syntax, identifiers, and config snippets.
+  请使用 GitHub Flavored Markdown 编写综合结果：
+    - 使用 \`##\` 作为章节标题；禁止使用顶级 \`#\` 标题，因为标题字段本身就是页面标题，重复标题会造成重复显示。
+    - 枚举内容使用项目符号，使要求保留的成员各自清晰可见，而不是被揉进一句话里。
+    - 仅当语料确实具有表格结构（例如计划矩阵、限制条件表）时才使用表格；否则使用段落。
+    - 字面语法、标识符和配置片段使用围栏代码块。
 
-  When you have read enough to write an accurate synthesis, produce
-  EXACTLY one file at the cwd root and nothing else:
+  充分阅读并能够准确综合后，只在当前工作目录根目录创建且仅创建一个文件：
 
-    \`.relay-pi-train.json\` — a JSON object with exactly two string fields:
+    \`.relay-pi-train.json\` —— 一个恰好包含两个字符串字段的 JSON 对象：
       {
-        "headline": "<short title for this corpus, under 120 characters, no trailing punctuation>",
-        "observationContent": "<dense, concrete, durable, high-priority knowledge an agent would need to act on this material, written as markdown. Use as much length as it takes to retain every load-bearing fact above — completeness beats brevity. One self-contained document about this corpus and nothing else. No preamble, no 'this corpus contains' framing.>"
+        "headline": "<该语料的简短标题，不超过120个字符，末尾不加标点>",
+        "observationContent": "<以 Markdown 编写的密集、具体、持久且高优先级的知识，供 Agent 据此处理相关材料。为保留上述所有关键事实，可按需增加篇幅；完整性优先于简洁。内容应是一份关于该语料的自包含文档，不要添加前言，也不要写‘本语料包含’之类的开场。>"
       }
 
-  Do NOT write \`AGENTS.md\` or any other file. The JSON handoff is the
-  only deliverable. Neither field may be empty. After writing the file,
-  stop. You do not need to say anything else.
+  不要创建 \`AGENTS.md\` 或任何其他文件。JSON 交接文件是唯一交付物。两个字段都不得为空。写完文件后立即停止，不需要再回复其他内容。
 `;
 
 /**
- * Launch the relay-pi agent inside the corpus folder and let it produce a
- * `.relay-pi-train.json` handoff file. Returns the parsed synthesis result.
- * The handoff file is removed before launch (so a leftover from a failed
- * run can't be mistaken for fresh output) and after a successful read
- * (so it doesn't leak into the corpus or the archive).
+ * 在语料目录中启动 relay-pi Agent，让它生成 `.relay-pi-train.json` 交接文件，
+ * 并返回解析后的 synthesis 结果。启动前会移除交接文件（避免把失败运行留下的旧文件
+ * 误认为新输出），成功读取后也会移除它（避免文件泄漏到语料或归档中）。
  */
 async function runAgentSynthesis(
   options: { folder: string; slug: string; model: string },
@@ -226,9 +202,8 @@ async function runAgentSynthesis(
 
   const manager = new SessionManager(config);
 
-  // Quietly surface what the sub-agent is doing so a long synthesis run
-  // doesn't look frozen. We only relay tool calls (the visible work) and
-  // any system-level messages; assistant text and reasoning are skipped.
+  // 安静地展示子 Agent 正在做什么，避免长时间 synthesis 看起来像卡住。只转发
+  // 工具调用（可见的工作）和系统级消息；跳过 assistant 文本及推理。
   const unsubscribe = manager.subscribe(({ event }) => {
     if (event.type === "step") {
       const step = event.step;
@@ -244,7 +219,7 @@ async function runAgentSynthesis(
 
   try {
     const session = manager.create({
-      prompt: `Synthesize the corpus in this directory. Slug: ${options.slug}.`,
+      prompt: `请综合此目录下的语料。标识符：${options.slug}。`,
     });
     const terminal = await session.waitForTerminal();
     if (terminal.type !== "complete") {
@@ -257,8 +232,8 @@ async function runAgentSynthesis(
 
   const raw = await readFile(handoffPath, "utf8").catch(() => {
     throw new Error(
-      // No "try a stronger model" advice: callers pin the synthesis model, so
-      // there is nothing for the reader to escalate to. Say what happened.
+      // 不建议“尝试更强模型”：调用方固定了 synthesis 模型，阅读者没有可升级的目标。
+      // 只需说明实际发生了什么。
       `train: the synthesis agent finished without writing ${handoffPath}, so there is no memory to store. The corpus may be empty, unreadable, or too large to finish in one run.`,
     );
   });
@@ -287,7 +262,7 @@ async function runAgentSynthesis(
   };
 }
 
-/** Build the isolated runner configuration used only for corpus synthesis. */
+/** 构造仅供语料 synthesis 使用的隔离运行器配置。 */
 export function buildTrainSynthesisConfig(options: {
   folder: string;
   model: string;
@@ -295,17 +270,15 @@ export function buildTrainSynthesisConfig(options: {
   return {
     cwd: options.folder,
     model: options.model,
-    // Don't write to the durable memory DB during synthesis; the train
-    // command owns the single observation row that lands at the end.
+    // synthesis 期间不要写入持久化 memory DB；train 命令负责最后落下唯一一条观察记录。
     memoryDbPath: false,
-    // The corpus may sit below an agent root with trained memories. Keep the
-    // synthesis input limited to corpus files so prior training cannot steer
-    // or recursively contaminate the new record.
+    // 语料可能位于包含已训练记忆的 Agent 根目录下。将 synthesis 输入限制为语料文件，
+    // 避免之前的训练影响结果，或递归污染新记录。
     memoryStores: false,
-    // Synthesis must not be steered by the corpus's own AGENTS.md (if
-    // present) — the agent reads files as data, not as instructions.
+    // synthesis 不应受语料自身 AGENTS.md（如果存在）影响——Agent 将文件作为数据读取，
+    // 而不是作为指令。
     systemPromptFiles: [],
-    // Avoid local user-skill drift influencing what the sub-agent does.
+    // 避免本地用户 skill 漂移影响子 Agent 的行为。
     skillDiscovery: { includeDefaults: false },
     systemInstructions: TRAIN_SYSTEM_PROMPT,
     mode: "agent",
@@ -313,19 +286,18 @@ export function buildTrainSynthesisConfig(options: {
 }
 
 /**
- * Run `relay-pi train <folder>` — synthesize one corpus, persist it to the single
- * selected file store or legacy DB, replace the target's prior slug, and keep
- * the unchanged private corpus archive under `~/.relay-pi/train/<memoryId>/`.
+ * 运行 `relay-pi train <folder>`——合成一份语料，将其持久化到选中的单个文件存储或旧版 DB，
+ * 替换目标中此前相同 slug 的记录，并将未改变的私有语料归档保存在
+ * `~/.relay-pi/train/<memoryId>/`。
  */
 export async function runTrainCommand(
   args: string[],
   io: TrainCommandIO = { stdout: process.stdout, stderr: process.stderr },
 ): Promise<void> {
   const cwd = io.cwd ?? process.cwd();
-  // The management subcommands are read/edit/delete siblings of the synthesis
-  // command. They route before the synthesis arg parser, which would otherwise
-  // treat the subcommand word as a corpus folder. Everything else falls
-  // through to the default `train <folder>` create flow.
+  // 管理子命令是 synthesis 命令的 list/show/update/delete 同级命令。它们必须在 synthesis
+  // 参数解析器之前分流，否则子命令单词会被当成语料 folder。其他参数继续进入默认的
+  // `train <folder>` 创建流程。
   switch (args[0]) {
     case "list":
       return runTrainListCommand(args.slice(1), io);
@@ -342,17 +314,15 @@ export async function runTrainCommand(
   const sources = await resolveSources(options.sourceFlags, cwd);
   const writeTarget = requireWriteTarget(sources);
 
-  // Post-parse failures throw instead of calling `fail()`: the CLI entry
-  // (`runCli`) prints them identically, while in-process callers (the
-  // eval harness, the model sweep) can catch them and run their cleanup.
+  // 解析参数后的失败通过抛出异常处理，而不是调用 `fail()`：CLI 入口（`runCli`）会以相同方式
+  // 打印它们，同时进程内调用方（eval harness、model sweep）可以捕获异常并执行清理。
   const folderStat = await stat(options.folder).catch(() => undefined);
   if (!folderStat || !folderStat.isDirectory()) {
     throw new Error(`Folder not found or not a directory: ${options.folder}`);
   }
 
-  // Resolve the model the same way `relay-pi run` does so shorthands and
-  // provider routing behave identically. Env files in the corpus folder
-  // can supply provider credentials; load them before resolution.
+  // 按与 `relay-pi run` 相同的方式解析模型，使 shorthand 和 provider 路由保持一致。
+  // 语料目录中的环境文件可以提供 provider 凭据；在解析前加载它们。
   const dotenvKeys = loadCliEnvFiles(options.folder);
   const modelResolution = resolveCliModel(options.model, dotenvKeys);
   const resolvedModel = modelResolution.modelName;
@@ -385,19 +355,15 @@ export async function runTrainCommand(
       io,
     );
 
-    // Insert the new row BEFORE deleting priors: if the process dies
-    // between the two steps the worst case is a duplicate `train:<slug>`
-    // row (cleaned up by the next train run), never zero rows. The row is
-    // written as `kind: "manual"` so the loader's manualBias ranks it at
-    // the top of the global pack (a manual row with no sessionId never
-    // matches a live session, so it lands in the global pack via the
-    // loader's NULL-session handling), and `relay-pi memory reflect`'s prune
-    // preserves it by kind regardless of age.
+    // 在删除旧记录之前写入新记录：如果进程在两步之间退出，最坏情况是出现重复的
+    // `train:<slug>` 行（下次 train 会清理），而不会出现零行。该行写成
+    // `kind: "manual"`，使 loader 的 manualBias 将其排在全局 pack 顶部（没有 sessionId
+    // 的手工行永远不会匹配实时 session，因此会通过 loader 的 NULL-session 处理进入全局
+    // pack），并且 `relay-pi memory reflect` 会按 kind 保留它，不受年龄影响。
     const trainTag = trainSlugTag(options.slug);
     const observedDate = new Date().toISOString().slice(0, 10);
-    // The embed makes the row vector-recallable as soon as train exits
-    // (no backfill worker runs in this one-shot process). Embed failure
-    // degrades silently — the row lands and a later backfill embeds it.
+    // embed 使 train 退出后记录立即可通过向量检索；这个 one-shot 进程不会运行 backfill worker。
+    // embed 失败会静默降级——记录仍会写入，之后由 backfill 补齐 embedding。
     const observation = await appendObservation(
       session,
       {
@@ -414,10 +380,9 @@ export async function runTrainCommand(
       throw new Error(`Could not write training memory to ${dbPath} (lock contention).`);
     }
 
-    // SELECT + DELETE share one `withDb` so the replace step is atomic
-    // against peer writers and lock failure surfaces in one place.
-    // Invariant after this block: exactly one `train:<slug>` row — the
-    // one written above.
+    // SELECT 和 DELETE 共用一次 `withDb`，使替换步骤相对于并行写入者保持原子性，
+    // 锁失败也会在同一处暴露。
+    // 此代码块结束后的不变量：恰好存在一条 `train:<slug>` 行，即上面写入的那一条。
     const priorIds = await session.withDb(async (db) => {
       const result = await db.query<QueriedRow>("SELECT id, tags_json FROM observations");
       const ids: string[] = [];
@@ -450,8 +415,7 @@ export async function runTrainCommand(
     const replacedSuffix = priorIds.length > 0 ? ` (replaced ${priorIds.length} prior row(s))` : "";
     io.stderr.write(`[persist] memory id=${observation.id}${replacedSuffix}\n`);
 
-    // `runAgentSynthesis` already removed `.relay-pi-train.json`; the
-    // walker's skip list is defense in depth.
+    // `runAgentSynthesis` 已经移除了 `.relay-pi-train.json`；walker 的跳过列表属于深度防御。
     const archivedFiles = await collectArchiveFiles(options.folder);
     const manifest: TrainManifest = {
       memoryId: observation.id,
@@ -571,11 +535,10 @@ function truncate(value: string, max: number): string {
 }
 
 /**
- * Map a list/record to its `--json` wire shape, replacing the internal
- * epoch-ms `createdAt` with an ISO 8601 string. The in-memory
- * `TrainListEntry`/`TrainRecord` keep `createdAt` as a number (used for
- * newest-first sorting); ISO conversion happens only at the output edge so
- * the JSON contract stays stable regardless of the in-memory representation.
+ * 将 list/record 映射为 `--json` 的 wire shape，把内部 epoch-ms 的 `createdAt`
+ * 替换为 ISO 8601 字符串。内存中的 `TrainListEntry`/`TrainRecord` 仍将
+ * `createdAt` 保持为数字（用于按最新优先排序）；ISO 转换只发生在输出边界，
+ * 使 JSON 契约不受内存表示影响。
  */
 function toTrainListEntryJson(entry: TrainListEntry) {
   return { ...entry, createdAt: new Date(entry.createdAt).toISOString() };
@@ -585,8 +548,7 @@ function toTrainRecordJson(record: TrainRecord) {
   return { ...record, createdAt: new Date(record.createdAt).toISOString() };
 }
 
-/** Render the list as an aligned text table. Pure so it is unit-testable
- *  without a database. */
+/** 渲染对齐的文本表格。保持纯函数，以便无需数据库即可进行单元测试。 */
 export function formatTrainList(entries: TrainListEntry[]): string {
   if (entries.length === 0) {
     return "No trainings found. Run `relay-pi train <folder>` to create one.";
@@ -629,7 +591,7 @@ export function formatTrainList(entries: TrainListEntry[]): string {
   return [line(headers), ...rows.map(line)].join("\n");
 }
 
-/** Multi-line detail view for a single training (`relay-pi train show`). */
+/** 单条 training 的多行详情视图（`relay-pi train show`）。 */
 function formatTrainRecord(record: TrainRecord): string {
   return [
     `slug       : ${record.slug}`,
@@ -646,20 +608,19 @@ function formatTrainRecord(record: TrainRecord): string {
 }
 
 interface TrainSubOptions {
-  /** Positional slug argument; required by show/update/delete, unused by list. */
+  /** 位置参数 slug；show/update/delete 必填，list 不使用。 */
   slug?: string;
-  /** Explicit backend flags; empty means inherited stores plus the default DB. */
+  /** 显式 backend 标志；为空时使用继承的存储以及默认 DB。 */
   sourceFlags: MemorySourceFlags;
   json: boolean;
-  /** Path to the new observation text, for `update`. */
+  /** `update` 使用的新增 observation 文本路径。 */
   contentFile?: string;
   waitBudgetMs?: number;
 }
 
 /**
- * Shared arg parser for the management subcommands. Each command validates
- * which fields it actually requires (e.g. `show` needs a slug, `update` also
- * needs `--content-file`); this only does the lexing.
+ * 管理子命令共用的参数解析器。每个命令会校验自己实际需要的字段（例如 show 需要
+ * slug，update 还需要 `--content-file`）；此处只负责词法解析。
  */
 function parseTrainSubArgs(args: string[], cwd: string): TrainSubOptions | undefined {
   const sourceArgs = lexMemorySourceFlags(args, cwd);

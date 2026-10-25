@@ -20,7 +20,7 @@ export interface PatternGuardrailRuleConfig {
   reason: string;
 }
 
-/** Extra guardrail policies layered on top of the runner defaults. */
+/** 叠加在 runner 默认策略之上的额外 guardrail 策略。 */
 export type GuardrailConfig =
   | { kind: "pattern"; rules: PatternGuardrailRuleConfig[] }
   | { kind: "semantic"; model: Model<any>; policy: string };

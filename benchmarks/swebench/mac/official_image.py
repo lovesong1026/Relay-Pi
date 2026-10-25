@@ -20,8 +20,8 @@ INSTANCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+$")
 def resolve_image(instance_id: str) -> str:
     if INSTANCE_ID_PATTERN.fullmatch(instance_id) is None:
         raise ValueError(f"invalid SWE-bench instance id: {instance_id!r}")
-    # SWE-bench 4.1.0's TestSpec derives remote instance images solely from
-    # these values. Deriving the same key locally avoids a mutable Hub lookup.
+    # SWE-bench 4.1.0 的 TestSpec 仅根据这些值推导远程实例镜像。
+    # 在本地推导同一个 key 可以避免可变的 Hub 查询。
     key = f"sweb.eval.{IMAGE_ARCH}.{instance_id.lower()}:latest"
     return f"{IMAGE_NAMESPACE}/{key}".replace("__", "_1776_")
 

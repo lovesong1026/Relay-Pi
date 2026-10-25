@@ -1,29 +1,26 @@
 #!/usr/bin/env bun
 /**
- * LongMemEval harness for relay-pi's observational-memory pipeline.
+ * relay-pi 观察式记忆流水线的 LongMemEval harness。
  *
- * Per instance:
- *   1. Per-question isolated MemorySession dataDir under
- *      benchmarks/longmemeval/results/sessions/<question_id>/.
- *   2. Ingest each haystack_session via updateObservationalMemory using
- *      sessionId=haystack_session_ids[i] and now=Date(haystack_dates[i])
- *      so observations carry the real wall-clock that makes
- *      temporal-reasoning / knowledge-update answerable.
- *   3. Read back all stored observations and answer the question with the
- *      relay-pi model gateway. Same shorthand model is used for both the
- *      observer (memory model) and the reader (actor model).
- *   4. Append {question_id, hypothesis} to
- *      benchmarks/longmemeval/results/<run-name>.hyp.jsonl.
+ * 每个样本执行：
+ *   1. 在 benchmarks/longmemeval/results/sessions/<question_id>/ 下创建
+ *      每个问题独立的 MemorySession dataDir。
+ *   2. 通过 updateObservationalMemory 导入每个 haystack_session，并使用
+ *      sessionId=haystack_session_ids[i] 和 now=Date(haystack_dates[i])，
+ *      使观察记录携带真实墙上时钟时间，从而可以回答时间推理/知识更新问题。
+ *   3. 读取所有已保存的观察记录，并通过 relay-pi model gateway 回答问题。
+ *      observer（memory model）和 reader（actor model）使用同一个 shorthand model。
+ *   4. 将 {question_id, hypothesis} 追加到
+ *      benchmarks/longmemeval/results/<run-name>.hyp.jsonl。
  *
- * Usage:
+ * 用法：
  *   bun benchmarks/longmemeval/run.ts \
  *     --dataset benchmarks/longmemeval/data/longmemeval_oracle.json \
  *     --limit 20 \
  *     --run-name smoke-oracle-20
  *
- * Add --stratify to sample `--limit` items proportionally across
- * `question_type` buckets (deterministic via --seed, default 42) instead
- * of taking the head of the dataset.
+ * 添加 --stratify 后，会按 question_type 分组按比例抽取 --limit 个样本
+ *（通过 --seed 确定性抽样，默认值为 42），而不是直接取数据集开头的样本。
  */
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -55,14 +52,14 @@ interface Instance {
 
 interface CliOpts {
   dataset: string;
-  /** Cap on items to run. When --stratify is set, this is the size of the stratified sample. */
+  /** 要运行的样本上限；设置 --stratify 时，这是分层样本的大小。 */
   limit: number;
   runName: string;
   model: string;
   concurrency: number;
-  /** When true, pick `limit` instances proportionally across `question_type` buckets instead of taking the head. */
+  /** 为 true 时，按 question_type 分组按比例选择 `limit` 个样本，而不是取数据集开头。 */
   stratify: boolean;
-  /** Seed for deterministic stratified sampling. */
+  /** 确定性分层抽样所用的 seed。 */
   seed: number;
 }
 
@@ -117,7 +114,7 @@ function parseArgs(): CliOpts {
   return { dataset, limit, runName, model, concurrency, stratify, seed };
 }
 
-/** Deterministic mulberry32 PRNG. */
+/** 按确定性的 mulberry32 算法生成伪随机数。 */
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -130,10 +127,10 @@ function mulberry32(seed: number): () => number {
 }
 
 /**
- * Sample `total` items from `all`, proportionally allocated across
- * `question_type` buckets. Uses largest-remainder rounding so the bucket
- * counts sum to exactly `total`, and a seeded PRNG for the in-bucket pick.
- * Returns items in the dataset's original order so the run log stays readable.
+ * 从 `all` 中抽取 `total` 个样本，并按比例分配到各个
+ * `question_type` 分组。使用最大余数法取整，使各组数量之和恰好等于
+ * `total`，并使用带 seed 的 PRNG 在组内抽样。返回数据集原始顺序，
+ * 让运行日志保持可读。
  */
 function stratifiedSample(all: Instance[], total: number, seed: number): Instance[] {
   if (total >= all.length) return all.slice();
@@ -150,7 +147,7 @@ function stratifiedSample(all: Instance[], total: number, seed: number): Instanc
     return { key, items, exact, base: Math.floor(exact), frac: exact - Math.floor(exact) };
   });
   let allocated = allocations.reduce((sum, a) => sum + a.base, 0);
-  // Distribute remaining slots by largest fractional remainder.
+  // 按最大余数分配剩余名额。
   const byFrac = allocations.slice().sort((a, b) => b.frac - a.frac);
   let idx = 0;
   while (allocated < total) {
@@ -164,7 +161,7 @@ function stratifiedSample(all: Instance[], total: number, seed: number): Instanc
   const rng = mulberry32(seed);
   const chosen: Instance[] = [];
   for (const a of allocations) {
-    // Fisher-Yates partial shuffle to pick `base` from `items` deterministically.
+    // 使用 Fisher-Yates 部分洗牌，以确定性地从 `items` 中选出 `base` 个样本。
     const pool = a.items.slice();
     for (let i = 0; i < a.base; i++) {
       const j = i + Math.floor(rng() * (pool.length - i));
@@ -172,13 +169,13 @@ function stratifiedSample(all: Instance[], total: number, seed: number): Instanc
     }
     chosen.push(...pool.slice(0, a.base));
   }
-  // Preserve dataset order.
+  // 保留数据集顺序。
   const order = new Map(all.map((inst, i) => [inst.question_id, i] as const));
   chosen.sort((x, y) => (order.get(x.question_id) ?? 0) - (order.get(y.question_id) ?? 0));
   return chosen;
 }
 
-/** Convert "2023/04/10 (Mon) 23:07" to a Date. */
+/** 将 "2023/04/10 (Mon) 23:07" 转换为 Date。 */
 function parseLmeDate(s: string): Date {
   const m = s.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+\([A-Za-z]+\)\s+(\d{2}):(\d{2})/);
   if (!m) throw new Error(`Bad LME date: ${s}`);
@@ -281,13 +278,13 @@ async function ingestInstance(
   }
 }
 
-const READER_SYSTEM = `You are answering a user question using only the memory log below. The memory log is the assistant's prior compressed observations from earlier chat sessions with this user; each entry is dated.
+const READER_SYSTEM = `你需要仅根据下方记忆日志回答用户问题。记忆日志是助手对先前与该用户聊天会话的压缩观察；每条都有日期。
 
-Rules:
-- Answer in a single short sentence or phrase. No preamble like "Based on the memory log".
-- Use the dates in the memory log to resolve "when", "how long ago", "the latest", "the most recent", etc. relative to the QUESTION DATE.
-- If the memory log does not contain enough information to answer, reply exactly: "I don't know."
-- For "knowledge-update" style questions where the user's situation has changed over time, prefer the most recent dated observation.
+规则：
+- 用一个简短句子或短语回答。不要添加“根据记忆日志”等开场白。
+- 使用记忆日志中的日期，根据问题日期理解“何时”“多久以前”“最新的”“最近的”等表述。
+- 如果记忆日志没有足够信息回答，请准确回复：“我不知道。”
+- 对于情况随时间变化的“知识更新”类问题，优先使用日期最新的 observation。
 `;
 
 interface ReaderResult {
@@ -311,7 +308,7 @@ ${memoryText || "(empty)"}
 QUESTION:
 ${inst.question}
 
-Answer concisely:`;
+答案请简洁：`;
   const response = await complete(
     model,
     {
@@ -375,7 +372,7 @@ async function main() {
   let nextIndex = 0;
   let completed = 0;
 
-  // Serialize JSONL appends across workers so lines never interleave.
+  // 在 worker 之间串行化 JSONL append，避免行内容交错。
   let appendChain: Promise<void> = Promise.resolve();
   const appendLine = (path: string, line: string) => {
     appendChain = appendChain.then(() => appendFile(path, line));

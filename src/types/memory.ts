@@ -1,275 +1,234 @@
-/** Relative importance used for recall ordering and prompt rendering. */
+/** 用于召回排序和 prompt 渲染的相对重要性。 */
 export type ObservationPriority = "high" | "medium" | "low";
 
 /**
- * Whether a row is a raw observation, a reflection synthesized by the
- * reflector, a single user-added `note`, or a bulk-curated `manual` corpus
- * row. Reflections rank higher than raw
- * observations by default (see `reflectionBias`) because they are condensed
- * cross-observation summaries that survived a curation pass; the loader
- * prefers them when the global budget tightens.
+ * 行是原始 observation、由 reflector 合成的 reflection、用户单独添加的 `note`，还是批量整理
+ * 的 `manual` corpus 行。默认情况下，reflection 的排名高于原始 observation（见
+ * `reflectionBias`），因为它们是经过整理阶段保留下来的跨 observation 浓缩摘要；全局
+ * 预算收紧时，loader 会优先保留它们。
  *
- * `manual` rows are bulk-curated corpus syntheses (e.g. `relay-pi train`): they
- * rank far above everything via `manualBias` and are never compacted by the
- * reflect prune. `note` rows are single user-added memories (`relay-pi memory
- * add`): they get only a small `noteBias` bump above reflections and stay
- * eligible for the reflect prune, so a quick note ages and folds like any
- * other observation rather than pinning itself forever.
+ * `manual` 行是批量整理的语料合成结果（例如 `relay-pi train`）：通过 `manualBias` 排名
+ * 远高于其他内容，并且不会被 reflect prune 压缩。`note` 行是用户单独添加的记忆
+ *（`relay-pi memory add`）：只在 reflection 之上获得小幅 `noteBias` 提升，仍符合
+ * reflect prune 条件，因此快速记录会像其他 observation 一样随时间老化并折叠，不会永久固定。
  */
 export type ObservationKind = "observation" | "reflection" | "manual" | "note";
 
 /**
- * Where an observation came from. Used for auditability and downstream
- * filtering. Tool provenance is captured as `tool:<name>` in `tags`
- * rather than a separate variant — keeps the source enum closed and
- * makes tool authorship searchable through the existing tag axis.
+ * observation 的来源。用于审计和下游过滤。工具来源以 `tool:<name>` 写入 `tags`，而不是
+ * 增加单独的 variant——这样 source enum 保持封闭，同时可以通过现有 tag 轴搜索工具归属。
  *
- * - `user`: an operator-authored memory (e.g. `relay-pi memory add`).
- * - `agent`: produced by an agent during a turn; `name` is optional.
- * - `system`: synthesized by the system, including the training origin
- *   (`relay-pi train`) — there is no separate `train` kind.
- * - `api`: written programmatically through a caller-owned API/gateway.
- * - `import`: brought in from a bulk import of external memory rows.
+ * - `user`：操作员编写的记忆（例如 `relay-pi memory add`）。
+ * - `agent`：Agent 在 turn 中产生；`name` 可选。
+ * - `system`：系统合成，包括训练来源（`relay-pi train`）——不存在单独的 `train` kind。
+ * - `api`：通过调用方拥有的 API/gateway 以程序方式写入。
+ * - `import`：从外部记忆行的批量导入带入。
  */
 export type ObservationSource =
   | { kind: "user" }
-  /** Produced by an agent; name is optional because the runner does not assign agent ids. */
+  /** 由 Agent 产生；名称可选，因为 runner 不会分配 Agent id。 */
   | { kind: "agent"; name?: string }
   | { kind: "system" }
   | { kind: "api" }
   | { kind: "import" };
 
-/** Durable memory rendered back into model context after raw messages compact. */
+/** 将持久化记忆渲染回模型上下文（发生原始消息压缩后）。 */
 export interface Observation {
-  /** Stable persistence key for the observation row. */
+  /** observation 行稳定的持久化 key。 */
   id: string;
-  /** Unix timestamp in milliseconds when this observation was stored. */
+  /** 此 observation 保存时的 Unix 毫秒时间戳。 */
   createdAt: number;
   /**
-   * Unix timestamp in milliseconds for the most recent turn that
-   * actually used this observation. Initialized to `createdAt` and
-   * advanced when the observer reports the row as having informed an
-   * assistant response (`usedObservationIds`). Drives the global-layer
-   * ranking decay so memories that keep getting used keep surfacing,
-   * regardless of how old they originally are.
+   * 实际使用此 observation 的最近一次 turn 的 Unix 毫秒时间戳。初始值为 `createdAt`；
+   * 当 observer 报告某行影响了 assistant 响应（`usedObservationIds`）时推进。它驱动
+   * 全局层的排名衰减，使持续被使用的记忆即使原本很旧也会继续出现。
    */
   lastUsedAt: number;
   /**
-   * Session that produced this observation. Optional only for rows that
-   * predate sessionId tracking — new writes always set it. Loaders use
-   * this as the local/global axis: rows whose sessionId matches the
-   * current runner are local (always rendered), everything else is
-   * global (ranked into a fixed token budget).
+   * 产生此 observation 的 Session。只有早于 sessionId 跟踪的旧行可以省略；新写入始终会设置。
+   * loader 以此作为 local/global 轴：sessionId 匹配当前 runner 的行属于 local（始终渲染），
+   * 其他行属于 global（按固定 token 预算排序）。
    */
   sessionId?: string;
   /**
-   * Whether this row is a raw observation, a reflection, a note, or a
-   * manual corpus row. The reflector replaces a batch of observations with a
-   * single condensed reflection; downstream ranking gives reflections a
-   * multiplier (`reflectionBias`), notes a slightly larger one
-   * (`noteBias`), and manual corpus rows the largest (`manualBias`) to
-   * match their higher signal-per-token.
+   * 此行是 raw observation、reflection、note 还是 manual corpus 行。reflector 会把一批
+   * observation 替换为一条浓缩 reflection；下游排序会给 reflection 一个乘数
+   *（`reflectionBias`），给 note 稍大的乘数（`noteBias`），给 manual corpus 行最大的乘数
+   *（`manualBias`），以匹配它们更高的单位 token 信号量。
    */
   kind: ObservationKind;
-  /** Calendar date the observation is anchored to, usually the day it was observed. */
+  /** 通常是 observation 发生当天、该 observation 所锚定的日历日期。 */
   observedDate: string;
-  /** Concrete date mentioned by the user or tool output when different from observedDate. */
+  /** 用户或工具输出提到的、不同于 observedDate 的具体日期。 */
   referencedDate?: string;
-  /** Original relative date phrase, such as "tomorrow" or "last week", when useful. */
+  /** 有用时保留的原始相对日期短语，例如 "tomorrow" 或 "last week"。 */
   relativeDate?: string;
-  /** 24-hour local time attached to the observation, when available. */
+  /** 可用时附加到 observation 的 24 小时制本地时间。 */
   timeOfDay?: string;
-  /** Importance signal used by recall and context rendering. */
+  /** recall 和上下文渲染使用的重要性信号。 */
   priority: ObservationPriority;
-  /** Origin of the observation for debugging, filtering, and future trust policies. */
+  /** 用于调试、过滤和未来信任策略的 observation 来源。 */
   source: ObservationSource;
-  /** The actual memory text that can be rendered back into model context. */
+  /** 可以渲染回模型上下文的实际记忆文本。 */
   content: string;
-  /** Lightweight labels for filtering, grouping, and persistence queries. */
+  /** 用于过滤、分组和持久化查询的轻量标签。 */
   tags: string[];
 }
 
-/** Complete durable memory view persisted outside the runner state. */
+/** 在 runner state 之外持久化的完整 durable memory 视图。 */
 export interface ObservationalMemorySnapshot {
-  /** All durable observations currently owned by the runner memory store. */
+  /** 当前由 runner memory store 持有的所有 durable observations。 */
   observations: Observation[];
-  /** Approximate token counts used to decide when observation/reflection should execute. */
+  /** 用于决定何时执行 observation/reflection 的近似 token 数。 */
   estimatedTokens: {
-    /** Approximate tokens for all observation content. */
+    /** 所有 observation 内容的近似 token 数。 */
     observations: number;
   };
-  /** Unix timestamp in milliseconds for when this snapshot was produced. */
+  /** 生成此 snapshot 时的 Unix 毫秒时间戳。 */
   updatedAt: number;
 }
 
-/** Progress/result update emitted while observational memory work runs during a turn. */
+/** observation memory 在 turn 中运行时发出的进度/结果更新。 */
 export interface ObservationalMemoryActivityEvent {
-  /** Memory operation currently processing the latest pi-agent transcript boundary. */
+  /** 当前正在处理最新 pi-agent transcript 边界的 memory 操作。 */
   phase: "observation" | "reflection";
-  /** Whether the operation is still running or has finished. */
+  /** 操作仍在运行还是已经结束。 */
   status: "running" | "completed";
-  /** Human-readable status suitable for CLI/TUI surfaces. */
+  /** 适合 CLI/TUI 展示的可读状态。 */
   message: string;
-  /** Durable observations produced or replaced by a completed memory operation. */
+  /** 已完成的 memory 操作生成或替换的 durable observations。 */
   observations?: Observation[];
   /**
-   * Prior global-pack memories whose `lastUsedAt` was advanced because the
-   * observer attributed the latest exchange to them. Only set on the
-   * `observation` phase completion event, where usage attribution runs.
-   * Empty/undefined means no prior memory was reused on this turn. Carries
-   * the full observation rows (not just ids) so surfaces can render the
-   * reused content directly without a second database lookup.
+   * observer 将最新 exchange 归因给此前使用过的 global-pack memory 后，推进其 `lastUsedAt` 的
+   * 旧 global-pack memory。只在 `observation` 阶段的完成事件中设置，此时会执行使用归因。
+   * 空值/undefined 表示本 turn 没有复用旧 memory。携带完整 observation 行（而不只是 id），
+   * 使界面无需再次查询数据库即可直接渲染复用内容。
    */
   usageBumpedObservations?: Observation[];
 }
 
 /**
- * Fully resolved memory settings consumed by the observational pipeline.
+ * observation pipeline 使用的完整解析后 memory 设置。
  *
- * All numeric token budgets are derived once from
- * `TurnRunnerConfig.effectiveContext` by `deriveMemoryBudgets` in
- * `src/memory/observational.ts` and merged with the user-settable
- * non-budget knobs by `resolveObservationalMemorySettings`. See
- * `MEMORY_BUDGET_RATIOS` for the derivation table.
+ * 所有数值 token 预算都会由 `TurnRunnerConfig.effectiveContext` 在
+ * `src/memory/observational.ts` 的 `deriveMemoryBudgets` 中一次性派生，再与用户可设置的
+ * 非预算选项通过 `resolveObservationalMemorySettings` 合并。派生表见 `MEMORY_BUDGET_RATIOS`。
  */
 export interface ObservationalMemorySettings {
-  /** Settings for extracting new observations from raw agent messages. */
+    /** 从原始 Agent 消息中提取新 observation 的设置。 */
   observation: {
     /**
-     * Derived. Raw-message token threshold (per turn) that triggers
-     * replacing old transcript content via the wire-shaping horizon.
-     * `0.60 * effectiveContext`.
+     * 派生值。每 turn 触发通过 wire-shaping horizon 替换旧 transcript 内容的原始消息 token
+     * 阈值；即 `0.60 * effectiveContext`。
      */
     messageTokens: number;
     /**
-     * Derived (fixed constant). Cap on raw transcript tokens sent to
-     * one observer call. The runner trims the unobserved tail to this
-     * size from the oldest end before each observer call, so the
-     * observer prompt never exceeds the memory model's hard window
-     * even when a long run of `hasMemory=false` turns lets the tail
-     * grow. The boundary message is included partially (head sliced,
-     * tail kept) rather than dropped whole. Independent of
-     * `effectiveContext` because the cap depends on the memory model's
-     * window, not the actor's budget.
+     * 派生值（固定常量）。一次 observer 调用发送的原始 transcript token 上限。每次 observer
+     * 调用前，runner 会从最旧端开始裁剪未观察尾部到此大小，因此即使连续多个
+     * `hasMemory=false` turn 让尾部增长，observer prompt 也不会超过 memory model 的硬窗口。
+     * 边界消息会部分保留（切 head、保留 tail），而不是整条丢弃。它独立于
+     * `effectiveContext`，因为上限取决于 memory model 的窗口，而不是 actor 的预算。
      */
     maxTranscriptTokens: number;
     /**
-     * Derived (fixed constant). Cap on the observation log the
-     * observer is asked to produce in one call. Drives both the soft
-     * budget rendered into the observer prompt and the hard retry /
-     * final-trim threshold enforced by `enforceObservationTokenBudget`.
-     * Independent of `effectiveContext`.
+     * 派生值（固定常量）。observer 单次调用被要求生成的 observation log 上限。它同时驱动
+     * observer prompt 中渲染的软预算，以及 `enforceObservationTokenBudget` 强制执行的
+     * 硬重试/最终裁剪阈值。独立于 `effectiveContext`。
      */
     maxObservationLogTokens: number;
     /**
-     * Derived. Raw-tail token target after the wire-shaping horizon
-     * advances. `OBSERVATION_BUFFER_RATIO * messageTokens`. Does not count against
-     * `effectiveContext` since it is bounded above by `messageTokens`,
-     * which already counts.
+     * 派生值。wire-shaping horizon 推进后的原始尾部 token 目标。
+     * `OBSERVATION_BUFFER_RATIO * messageTokens`。由于它的上限已经包含在 messageTokens 中，
+     * 不计入 `effectiveContext`。
      */
     bufferActivation: number;
     /**
-     * Derived (fixed constant). Budget for including previous observations
-     * as dedupe context in observer prompts. Observer-only; never enters
-     * the actor's context window.
+     * 派生值（固定常量）。observer prompt 中用于去重上下文的 previous observations 预算。
+     * 仅供 observer 使用，永远不会进入 actor 的上下文窗口。
      */
     previousObserverTokens: number;
-    /** Additional instructions appended to the observer system prompt. */
+    /** 追加到相应 memory system prompt 的额外指令。 */
     instruction?: string;
-    /** Whether the observer should also produce a short thread title. */
+    /** observer 是否同时生成简短的 thread 标题。 */
     threadTitle?: boolean;
   };
-  /** Settings for condensing the durable observation log. */
+  /** 用于压缩 durable observation log 的设置。 */
   reflection: {
     /**
-     * Derived. Local-memory token ceiling between reflections; reflection
-     * fires once the current session's observations grow past this.
-     * `0.325 * effectiveContext`.
+     * 派生值。reflection 之间的本地记忆 token 上限；当前 Session 的 observations 超过此值
+     * 后触发 reflection。即 `0.325 * effectiveContext`。
      */
     observationTokens: number;
     /**
-     * Derived. Local-memory token target after a reflection event.
-     * `REFLECTION_BUFFER_RATIO * observationTokens` (40% of the trigger).
-     * Does not count against `effectiveContext` since it is bounded above
-     * by `observationTokens`.
+     * 派生值。reflection event 后的本地记忆 token 目标。
+     * `REFLECTION_BUFFER_RATIO * observationTokens`（触发值的 40%）。由于上限不超过
+     * observationTokens，不计入 `effectiveContext`。
      */
     bufferActivation: number;
-    /** Additional instructions appended to the reflector system prompt. */
+    /** 追加到 reflector system prompt 的额外指令。 */
     instruction?: string;
   };
   /**
-   * Fixed cap. Token budget for the global memory layer rendered ahead of
-   * the local session's compacted view. Cross-session reflections and
-   * observations are ranked by `priority * usageDecay * kindBias` and
-   * packed greedily until this budget is exhausted. Held at a fixed value
-   * (`GLOBAL_CONTEXT_TOKEN_BUDGET`, currently 8k) instead of scaling with
-   * `effectiveContext` so larger model windows do not bloat the rendered
-   * prefix — the long tail of reflections stays reachable via the
-   * `recall_memory` tool.
+   * 固定上限。渲染在当前 Session 压缩视图之前的 global memory 层 token 预算。
+   * cross-session reflection 和 observation 按 `priority * usageDecay * kindBias` 排序，
+   * 并贪心装入直到预算耗尽。保持固定值（当前 8k 的 `GLOBAL_CONTEXT_TOKEN_BUDGET`），
+   * 而不随 `effectiveContext` 缩放，避免更大的 model window 让渲染前缀膨胀——较久远的
+   * reflection 仍可通过 `recall_memory` 工具访问。
    */
   globalContextTokenBudget: number;
   /**
-   * Half-life applied to time since `lastUsedAt` in the global-layer
-   * ranking. `usageDecay = 0.5 ^ ((now - lastUsedAt) / halfLifeMs)` —
-   * at one half-life since last use a row is worth half what a
-   * just-used row of the same priority is worth. Default 7 days:
-   * short enough that month-old unused chatter stops crowding out
-   * current week's decisions, long enough that yesterday's
-   * conclusions still surface tomorrow. Ranking is a monotone
-   * function of `lastUsedAt`, so the ordering between any two rows
-   * is invariant to `now` within a single ranking pass — the loader
-   * exploits this to push the entire ORDER BY into SQL.
+   * global-layer 排名中应用于 `lastUsedAt` 时间的 half-life。
+   * `usageDecay = 0.5 ^ ((now - lastUsedAt) / halfLifeMs)`——距离上次使用一个 half-life 后，
+   * 一行同等 priority 的价值是刚使用行的一半。默认 7 天：足够短，使一个月前未使用的
+   * 闲聊不再挤出本周决定；又足够长，使昨天的结论明天仍能出现。排名是 `lastUsedAt` 的
+   * 单调函数，因此单次排名过程中任意两行的顺序不受 `now` 影响——loader 利用这一点
+   * 将完整 ORDER BY 下推到 SQL。
    */
   recencyHalfLifeMs: number;
   /**
-   * Multiplier applied to a row's score when it is a reflection rather
-   * than a raw observation. Default 1.3 keeps reflections preferred at
-   * matched priority/recency without completely shutting raw
-   * observations out of the global pack.
+   * 当行是 reflection 而不是原始 observation 时应用的分数乘数。默认 1.3，使相同
+   * priority/recency 下 reflection 优先，但不会完全排除原始 observation。
    */
   reflectionBias: number;
   /**
-   * Multiplier applied to a row's score when `kind === 'manual'`,
-   * analogous to `reflectionBias`. Default 100 (see DEFAULT_MANUAL_BIAS)
-   * so curated rows sit at the top of the global pack — `ln(100) ≈ 4.6`,
-   * about 32 days of recency head start at the default half-life.
+   * 当 `kind === 'manual'` 时应用于行分数的乘数，作用类似 `reflectionBias`。默认 100
+   *（见 DEFAULT_MANUAL_BIAS），使整理后的行位于 global pack 顶部——`ln(100) ≈ 4.6`，
+   * 相当于默认 half-life 下约 32 天的 recency 领先。
    */
   manualBias: number;
   /**
-   * Multiplier applied to a row's score when `kind === 'note'` (a single
-   * `relay-pi memory add` row). Default 1.5: a small bump just above
-   * reflections so a user-vouched note edges out auto-synthesized rows,
-   * far below `manualBias` so it never dominates the pack like a train corpus.
+   * 当 `kind === 'note'`（一条 `relay-pi memory add` 记录）时应用于行分数的乘数。默认 1.5：
+   * 只比 reflection 略高，使用户确认过的 note 能胜过自动合成行；远低于 `manualBias`，
+   * 因此不会像 train corpus 一样支配整个 pack。
    */
   noteBias: number;
-  /** Whether the recall_memory tool and embedding backfill are enabled. */
+  /** 是否启用 recall_memory 工具和 embedding backfill。 */
   retrieval: boolean;
 }
 
 /**
- * Caller-provided memory settings. Only non-budget knobs are user-settable:
- * every numeric token budget is derived from
- * `TurnRunnerConfig.effectiveContext` and cannot be pinned individually.
+ * 调用方提供的 memory 设置。只有非预算选项可由用户设置：所有数值 token 预算都从
+ * `TurnRunnerConfig.effectiveContext` 派生，不能单独固定。
  */
 export interface ObservationalMemorySettingsInput {
   observation?: {
-    /** Additional instructions appended to the observer system prompt. */
+    /** 追加到相应 memory system prompt 的额外指令。 */
     instruction?: string;
-    /** Whether the observer should also produce a short thread title. */
+    /** observer 是否同时生成简短的 thread 标题。 */
     threadTitle?: boolean;
   };
   reflection?: {
-    /** Additional instructions appended to the reflector system prompt. */
+    /** 追加到 reflector system prompt 的额外指令。 */
     instruction?: string;
   };
-  /** Half-life for the global-layer recency decay; see `ObservationalMemorySettings.recencyHalfLifeMs`. */
+  /** global-layer recency decay 的 half-life；见 `ObservationalMemorySettings.recencyHalfLifeMs`。 */
   recencyHalfLifeMs?: number;
-  /** Reflection-vs-observation score multiplier; see `ObservationalMemorySettings.reflectionBias`. */
+  /** reflection 相对于 observation 的分数乘数；见 `ObservationalMemorySettings.reflectionBias`。 */
   reflectionBias?: number;
-  /** Manual-row score multiplier; see `ObservationalMemorySettings.manualBias`. */
+  /** manual 行分数乘数；见 `ObservationalMemorySettings.manualBias`。 */
   manualBias?: number;
-  /** Note-row score multiplier; see `ObservationalMemorySettings.noteBias`. */
+  /** note 行分数乘数；见 `ObservationalMemorySettings.noteBias`。 */
   noteBias?: number;
-  /** Whether the recall_memory tool and embedding backfill are enabled. */
+  /** 是否启用 recall_memory 工具和 embedding backfill。 */
   retrieval?: boolean;
 }
