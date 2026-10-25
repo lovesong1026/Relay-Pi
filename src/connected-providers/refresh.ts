@@ -7,14 +7,14 @@ const OPENAI_CODEX_SCOPE = "openid profile email";
 
 type FetchToken = (input: string, init: RequestInit) => Promise<Response>;
 
-/** Refresh one connected-provider credential using the provider's supported OAuth flow. */
+/** 使用 provider 支持的 OAuth 流程刷新一组已连接 provider 凭据。 */
 export async function refreshConnectedCredentials(
   provider: ConnectedProviderId,
   credentials: OAuthCredentials,
 ): Promise<OAuthCredentials> {
   if (provider === "github-copilot") {
-    // pi-ai's OAuth implementations hang off their provider now, and the
-    // exchange is `refresh(credential, signal)` rather than `refreshToken`.
+    // pi-ai 的 OAuth 实现现在挂在各自的 provider 上，且
+    // 交换通过 `refresh(credential, signal)` 而非 `refreshToken` 进行。
     const oauth = connectedProviders()
       .find((entry) => entry.id === provider)
       ?.oauth();
@@ -25,9 +25,9 @@ export async function refreshConnectedCredentials(
 }
 
 /**
- * Refresh ChatGPT credentials with the scope pi-ai currently omits. OpenAI
- * rotates refresh tokens, so the caller must replace the stored credential
- * object with this complete result rather than patching only `access`.
+ * 使用 pi-ai 当前省略的 scope 刷新 ChatGPT 凭据。OpenAI
+ * 会轮换刷新令牌，因此调用方必须用此完整结果替换已存储的凭据
+ * 对象，而不是只修补 `access`。
  */
 export async function refreshOpenAICodexCredentials(
   refreshToken: string,

@@ -22,9 +22,7 @@ import type { MemoryFixture } from "../../test/helpers/memory-fixture.js";
 import { createMemoryFixture } from "../../test/helpers/memory-fixture.js";
 
 /**
- * Raw shape of a row written by `bun run scripts/dump-memory.ts`. Memory
- * dumps for wire-payload reproductions are read straight from the JSON
- * the script emits — no derived seed file required.
+ * `bun run scripts/dump-memory.ts` 写入的 row 原始 shape。wire-payload reproduction 的 memory dump 直接读取该脚本输出的 JSON——不需要派生的 seed file。
  */
 interface DumpedRow {
   id: string;
@@ -43,9 +41,7 @@ interface DumpedRow {
 }
 
 /**
- * Subset of `TurnState` that the wire-shaping transform actually reads.
- * Driven from a real session state.json so the captured payload matches
- * what the runner would have dispatched at that moment.
+ * wire-shaping transform 实际读取的 `TurnState` 子集。数据来自真实 session 的 state.json，因此捕获的 payload 与 runner 在当时会派发的内容一致。
  */
 interface MinimalTurnState {
   agent: { messages: AgentMessage[] };
@@ -54,55 +50,31 @@ interface MinimalTurnState {
 
 export interface CapturedWirePayloadOptions {
   /**
-   * Parsed `state.json` for the session being reproduced — either pass
-   * the whole `TurnState` or `{ state: TurnState }` as written by
-   * `~/.relay-pi/sessions/<id>/state.json`.
+   * 要复现的 session 的已解析 `state.json`——可以传入完整的 `TurnState`，也可以传入 `~/.relay-pi/sessions/<id>/state.json` 写出的 `{ state: TurnState }`。
    */
   turnState: MinimalTurnState | { state: MinimalTurnState };
-  /** Parsed `memory-dump.json` (output of `bun run scripts/dump-memory.ts --pretty`). */
+  /** 已解析的 `memory-dump.json`（`bun run scripts/dump-memory.ts --pretty` 的输出）。 */
   memoryDump: DumpedRow[];
-  /** Session id passed to the context-pack loader so its rows land in the local layer. */
+  /** 传给 context-pack loader、使其 row 落入 local layer 的 session id。 */
   sessionId: string;
   /**
-   * Effective context window the runner was using. Drives every
-   * derived memory budget. Defaults to the production default
-   * (`DEFAULT_EFFECTIVE_CONTEXT`) so a missing value reproduces the
-   * 200k-window behavior most sessions experience.
+   * runner 使用的有效 context window。它驱动所有派生的 memory budget。默认值为生产默认值（`DEFAULT_EFFECTIVE_CONTEXT`），因此缺失时会复现大多数 session 所经历的 200k-window 行为。
    */
   effectiveContext?: number;
   /**
-   * Working directory the original session ran from. Used to rebuild
-   * the AGENTS.md system-prompt layer the same way the runner did.
-   * Defaults to `process.cwd()` so calling the harness from inside
-   * the same repo reproduces that repo's AGENTS.md verbatim.
-   * Observations on the session usually carry `cwd="..."` attributes
-   * that name the path explicitly.
+   * 原始 session 运行时所在的 working directory。用于按 runner 相同的方式重建 AGENTS.md system-prompt layer。默认值为 `process.cwd()`，因此从同一 repo 内调用 harness 时会逐字复现该 repo 的 AGENTS.md。session 上的 observations 通常带有明确命名路径的 `cwd="..."` 属性。
    */
   cwd?: string;
   /**
-   * `systemInstructions` the runner was started with. Most sessions
-   * leave this unset (the CLI does not inject extra instructions),
-   * but evals can pass a verbatim copy when they know the session
-   * was launched with a non-default value.
+   * runner 启动时使用的 `systemInstructions`。多数 session 不设置它（CLI 不注入额外 instructions），但 eval 在确定 session 以非默认值启动时可以传入逐字副本。
    */
   systemInstructions?: string;
   /**
-   * Skill-discovery overrides. Defaults to production discovery so
-   * the captured system prompt includes the same skill block the
-   * runner would have rendered. Pass `{ includeDefaults: false }` to
-   * keep the prompt cheap when the bug under test does not depend
-   * on skills.
+   * skill discovery overrides。默认使用生产 discovery，使 captured system prompt 包含 runner 原本会渲染的相同 skill block。传入 `{ includeDefaults: false }` 可在被测 bug 不依赖 skill 时降低 prompt 成本。
    */
   skillDiscovery?: TurnRunnerConfig["skillDiscovery"];
   /**
-   * Pinned system prompt string. When set, the harness skips the
-   * live `createSystemPromptWithAppendedLayers` rebuild and returns
-   * this exact string as `payload.systemPrompt` (with an empty
-   * `systemPromptFiles`). Pass the contents of a committed
-   * `system-prompt.txt` fixture so the eval reproduces what the
-   * model actually saw at capture time — otherwise the rebuild
-   * walks the CURRENT cwd's AGENTS.md and discovered skills, which
-   * drift independently of the captured session.
+   * 固定的 system prompt 字符串。设置后 harness 会跳过实时的 `createSystemPromptWithAppendedLayers` 重建，并将该精确字符串作为 `payload.systemPrompt` 返回（`systemPromptFiles` 为空）。传入已提交的 `system-prompt.txt` fixture 内容，使 eval 复现 model 在捕获时实际看到的内容——否则重建会遍历当前 cwd 的 AGENTS.md 与已发现的 skills，它们会独立于 captured session 发生漂移。
    */
   systemPromptOverride?: string;
 }
@@ -118,21 +90,17 @@ export interface CapturedWirePayload {
    */
   systemPrompt: string;
   /**
-   * Absolute paths of every AGENTS.md / system-prompt file that
-   * resolved on disk for this capture. Empty when
-   * `systemPromptOverride` skipped the live rebuild, since a pinned
-   * snapshot has no on-disk provenance.
+   * 本次 capture 在磁盘上解析出的所有 AGENTS.md / system-prompt 文件的绝对路径。`systemPromptOverride` 跳过实时重建时为空，因为固定 snapshot 没有磁盘来源信息。
    */
   systemPromptFiles: string[];
-  /** Eviction horizon read off the input state before the transform ran. */
+  /** 从输入 state 读取、transform 运行前的 eviction horizon。 */
   horizonBefore: number;
-  /** Eviction horizon after the transform ran. Differs only when the transform itself advanced it (token/byte trigger fired). */
+  /** transform 运行后的 eviction horizon。只有 transform 自身推进了它（token/byte trigger 触发）时才不同。 */
   horizonAfter: number;
-  /** Raw transcript message count before the horizon was applied. */
+  /** 应用 horizon 前的原始 transcript message 数量。 */
   rawMessageCount: number;
   /**
-   * Real (non-synthetic) message count that survived the horizon.
-   * Zero is the failure shape: every real user/tool message got evicted.
+   * 通过 horizon 后仍保留的真实（非 synthetic）message 数量。失败 shape 为零：所有真实的 user/tool message 都被 eviction。
    */
   retainedMessageCount: number;
   /**

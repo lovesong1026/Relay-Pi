@@ -10,19 +10,19 @@ interface MemoryQueryIO {
 }
 
 /**
- * An observation paired with its global-pack ranking score. `packScore` uses
- * the same name the canonical {@link toMemoryJson} shape emits, so the table
- * renderer and the JSON output read one field instead of drifting.
+ * 观察记录及其全局记忆包排名分数。`packScore` 与
+ * 规范的 {@link toMemoryJson} 结构输出的字段同名，因此表格
+ * 渲染器和 JSON 输出读取同一个字段，避免偏离。
  */
 type ScoredObservation = Observation & { packScore: number };
 
 /**
- * Build a runtime filter list that must enumerate *every* member of `T`.
- * A bare `satisfies readonly T[]` only checks each element is a valid `T`; it
- * silently tolerates a missing member — that gap is how `note` dropped out of
- * the kind filter and made `--type note` get rejected. This helper fails to
- * compile when the array omits any union member, so adding a new
- * `ObservationKind`/priority/source forces the matching filter to grow with it.
+ * 构建必须枚举 `T` 的*每个*成员的运行时筛选列表。
+ * 单独的 `satisfies readonly T[]` 只检查各元素是否为有效的 `T`；
+ * 它会默许成员缺失，正是这个缺口使 `note` 从
+ * 类型筛选中遗漏，导致 `--type note` 被拒绝。此辅助函数会在
+ * 数组遗漏任一联合类型成员时编译失败，因此新增
+ * `ObservationKind`/优先级/来源时，必须同步扩展对应筛选列表。
  */
 function exhaustiveList<T extends string>() {
   return <L extends readonly T[]>(list: [T] extends [L[number]] ? L : never): L => list;
@@ -30,10 +30,10 @@ function exhaustiveList<T extends string>() {
 
 const KINDS = exhaustiveList<ObservationKind>()(["observation", "reflection", "note", "manual"]);
 /**
- * The canonical `--priority` and `--source` value sets, compile-time-checked
- * to enumerate every union member. Exported so sibling memory commands
- * (e.g. `memory add`) validate the same axes against one source of truth
- * instead of redeclaring parallel literal lists that can silently drift.
+ * 规范的 `--priority` 和 `--source` 值集合，通过编译期检查
+ * 确保枚举所有联合类型成员。导出给同级记忆命令
+ * （例如 `memory add`），使其依据同一事实来源校验相同维度，
+ * 而非重复声明可能悄然偏离的并行字面量列表。
  */
 export const PRIORITIES = exhaustiveList<ObservationPriority>()(["high", "medium", "low"]);
 type SourceKind = Observation["source"]["kind"];
@@ -45,22 +45,22 @@ export interface MemoryQueryOptions {
   filters: MemoryQueryFilters;
   waitBudgetMs?: number;
   /**
-   * True when the invocation requested a non-TUI query — i.e. it passed
-   * `--json` or any filter flag. Bare `relay-pi memory` (only `--db`/`--wait`)
-   * leaves this false and opens the interactive TUI instead.
+   * 调用请求非 TUI 查询时为 true，即传入了
+   * `--json` 或任意筛选标志。直接调用 `relay-pi memory`（仅 `--db`/`--wait`）
+   * 时保持 false，改为打开交互式 TUI。
    */
   queryMode: boolean;
 }
 
-/** Parse UTC date filters; date-only bounds cover the whole day. */
+/** 解析 UTC 日期筛选条件；仅含日期的边界覆盖全天。 */
 function parseDateBound(raw: string, flag: string, edge: "start" | "end"): number {
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const iso = `${raw}T${edge === "start" ? "00:00:00.000" : "23:59:59.999"}Z`;
     const ms = Date.parse(iso);
     if (Number.isNaN(ms)) usageError(`Invalid ${flag} date: ${raw}`);
-    // Reject impossible calendar dates (e.g. 2026-02-31) that JS silently
-    // normalizes into a different day rather than returning NaN — otherwise a
-    // typo slides the createdAt window and the wrong rows get exported.
+    // 拒绝不存在的日历日期（如 2026-02-31），JS 会将其静默
+    // 规范化为另一天，而不是返回 NaN；否则输入错误会
+    // 移动 createdAt 窗口，导致导出错误的记录。
     if (new Date(ms).toISOString().slice(0, 10) !== raw) {
       usageError(`Invalid ${flag} date: ${raw} is not a real calendar date`);
     }
@@ -69,7 +69,7 @@ function parseDateBound(raw: string, flag: string, edge: "start" | "end"): numbe
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(raw)) {
     const ms = Date.parse(`${raw}Z`);
     if (Number.isNaN(ms)) usageError(`Invalid ${flag} datetime: ${raw}`);
-    // Same round-trip guard for the datetime form (e.g. 2026-02-31T00:00:00).
+    // 对日期时间形式（如 2026-02-31T00:00:00）进行相同的往返校验。
     if (new Date(ms).toISOString().slice(0, 19) !== raw) {
       usageError(`Invalid ${flag} datetime: ${raw} is not a real calendar datetime`);
     }
@@ -79,9 +79,9 @@ function parseDateBound(raw: string, flag: string, edge: "start" | "end"): numbe
 }
 
 /**
- * Validate a flag value against a closed set, exiting `64` (usage error) on a
- * missing or out-of-set value. Shared across memory subcommands so every enum
- * flag reports the same message shape and exit code.
+ * 根据封闭集合校验标志值；缺失或不在集合中时以 `64`
+ * （用法错误）退出。各记忆子命令共享此函数，使每个枚举
+ * 标志都报告相同格式的消息和退出码。
  */
 export function parseEnum<T extends string>(
   raw: string | undefined,
@@ -96,10 +96,10 @@ export function parseEnum<T extends string>(
 }
 
 /**
- * Parse the shared `relay-pi memory` argument set. The same flags drive both the
- * interactive TUI (bare invocation) and the scriptable query (any filter or
- * `--json`); `queryMode` records which path the caller asked for. Returns
- * `undefined` when `--help` was handled.
+ * 解析共享的 `relay-pi memory` 参数集合。同一组标志同时驱动
+ * 交互式 TUI（直接调用）和可脚本化查询（任意筛选条件或
+ * `--json`）；`queryMode` 记录调用方请求的路径。处理了
+ * `--help` 后返回 `undefined`。
  */
 export function parseMemoryArgs(args: string[]): MemoryQueryOptions | undefined {
   let dbPath = DEFAULT_MEMORY_DB_PATH;
@@ -115,7 +115,7 @@ export function parseMemoryArgs(args: string[]): MemoryQueryOptions | undefined 
         if (!args[i + 1] || args[i + 1]?.startsWith("-")) usageError(`Missing value for ${arg}`);
         dbPath = resolveUserPath(args[++i]!);
         break;
-      // `--type` and `--kind` are aliases for the same `Observation.kind` axis.
+      // `--type` 和 `--kind` 是同一 `Observation.kind` 维度的别名。
       case "--type":
       case "--kind":
         filters.kind = parseEnum(args[++i], KINDS, arg);
@@ -230,8 +230,8 @@ export function formatMemoryTable(observations: ScoredObservation[]): string {
 }
 
 /**
- * Run the non-TUI query path of `relay-pi memory`: fetch the filtered rows,
- * compute each row's global-pack score, and print JSON or an aligned table.
+ * 运行 `relay-pi memory` 的非 TUI 查询路径：获取筛选后的记录，
+ * 计算每条记录的全局记忆包分数，并打印 JSON 或对齐表格。
  */
 export async function runMemoryQuery(
   options: MemoryQueryOptions,
@@ -242,7 +242,7 @@ export async function runMemoryQuery(
     (db) => db.queryObservations(options.filters),
     { waitBudgetMs: options.waitBudgetMs },
   );
-  // Score with a single `now` so every row's value is comparable.
+  // 使用同一个 `now` 评分，使每条记录的值可比较。
   const now = Date.now();
   const scored: ScoredObservation[] = observations.map((o) => ({
     ...o,

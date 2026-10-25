@@ -6,13 +6,10 @@ export interface ObservationGroup {
   content: string;
   kind?: string;
   /**
-   * Working directory the observation was captured in, when known.
-   * Carried as an attribute on the `<observation-group>` wrapper so
-   * the reflector and any downstream reader can see which project
-   * a row belongs to without relying on the model to embed it in
-   * the content prose. Optional only because rows that predate cwd
-   * tracking carry no value — new writes always set it when the
-   * caller has a cwd.
+   * 捕获 observation 时的工作目录（已知时）。
+   * 作为 `<observation-group>` wrapper 的 attribute 携带，使 reflector 和下游 reader 无需依赖
+   * model 将项目写入 content prose，就能知道 row 属于哪个 project。仅因早于 cwd tracking 的
+   * row 没有该值才可选——调用方有 cwd 时，新写入始终设置它。
    */
   cwd?: string;
 }
@@ -239,9 +236,8 @@ export function reconcileObservationGroupsFromReflection(
       .join("\n\n");
   }
 
-  // Reconciled reflection inherits the cwd when every source group
-  // agrees; mixed-cwd inputs leave the attribute off because no single
-  // value is correct for the joined row.
+  // Reconciled reflection 在所有 source group 一致时继承 cwd；mixed-cwd input 不设置 attribute，
+  // 因为合并后的 row 没有一个正确的单一值。
   const sourceCwds = new Set(sourceGroups.map((group) => group.cwd).filter(Boolean));
   const inheritedCwd = sourceCwds.size === 1 ? sourceGroups[0]?.cwd : undefined;
   return wrapInObservationGroup(

@@ -91,7 +91,7 @@ async function writeManifest(args: string[]): Promise<void> {
   console.log(`Wrote ${manifest.entries.length} instances to ${outputPath}`);
 }
 
-/** Load the immutable dataset input used by manifest generation and paid campaigns. */
+/** 加载用于生成清单和付费测试活动的不可变数据集输入。 */
 async function readPinnedDatasetSnapshot(): Promise<Awaited<ReturnType<typeof fetchDataset>>> {
   const snapshot = JSON.parse(await readFile(DATASET_SNAPSHOT_PATH, "utf8")) as Awaited<
     ReturnType<typeof fetchDataset>

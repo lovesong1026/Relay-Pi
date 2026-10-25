@@ -12,26 +12,26 @@ import {
 const REFRESH_SKEW_MS = 60_000;
 
 export interface ConnectedTokenManager {
-  /** Load the process-lifetime connection snapshot and seed every still-valid access token. */
+  /** 加载进程生命周期内的连接快照，并填入所有仍有效的访问令牌。 */
   loadSnapshot(): Promise<readonly ConnectionRecord[]>;
-  /** Refresh all usable providers discovered by the boot snapshot. */
+  /** 刷新启动快照中发现的所有可用 provider。 */
   ensureFreshTokens(): Promise<void>;
-  /** Return a fresh token, coalescing concurrent refreshes for this provider. */
+  /** 返回有效令牌，并合并此 provider 的并发刷新。 */
   ensureFreshToken(provider: ConnectedProviderId): Promise<string | undefined>;
-  /** Synchronously read a usable access token from the in-process cache. */
+  /** 从进程内缓存同步读取可用的访问令牌。 */
   apiKey(provider: ConnectedProviderId): string | undefined;
-  /** Start a coalesced refresh without making a synchronous caller wait. */
+  /** 启动合并刷新，而不让同步调用方等待。 */
   refreshInBackground(provider: ConnectedProviderId): void;
-  /** Synchronously read the cached full credential set for a provider. */
+  /** 同步读取 provider 已缓存的完整凭据集。 */
   credentials(provider: ConnectedProviderId): OAuthCredentials | undefined;
 }
 
 interface ConnectedTokenManagerOptions {
-  /** Durable source of credentials and cross-process refresh serialization. */
+  /** 凭据的持久来源及跨进程刷新串行化机制。 */
   store: ConnectedProviderStore;
-  /** Clock used for independent provider expiry decisions. */
+  /** 用于独立判断各 provider 是否过期的时钟。 */
   now?: () => number;
-  /** Provider refresh edge, injectable so tests never call live OAuth issuers. */
+  /** provider 刷新边界，可注入以确保测试绝不调用真实 OAuth 签发方。 */
   refreshCredentials?: (
     provider: ConnectedProviderId,
     credentials: OAuthCredentials,
@@ -40,7 +40,7 @@ interface ConnectedTokenManagerOptions {
 
 type RefreshOutcome = { credentials: OAuthCredentials } | { error: unknown } | undefined;
 
-/** Build an isolated token cache around a connected-provider store. */
+/** 围绕已连接 provider 存储构建隔离的令牌缓存。 */
 export function createConnectedTokenManager(
   options: ConnectedTokenManagerOptions,
 ): ConnectedTokenManager {
@@ -65,9 +65,9 @@ export function createConnectedTokenManager(
     const pending = options.store
       .withLock<RefreshOutcome>(provider, async (current) => {
         if (!current) return { result: undefined };
-        // Recheck under the store lock: another process may already have
-        // refreshed the account model list. Consume the attempt even if the
-        // account still cannot serve the successor, so ordinary turns do not poll.
+        // 在存储锁内重新检查：另一个进程可能已经
+        // 刷新了账户模型列表。即使账户仍无法使用后继模型，也消耗
+        // 本次尝试，使普通回合不会轮询。
         const refreshCatalog =
           pendingCatalogRefresh.delete(provider) &&
           hasRetiredModelAvailability(provider, current.credentials);
@@ -125,9 +125,9 @@ export function createConnectedTokenManager(
       await Promise.all(
         bootConnections
           .filter(({ eligibility }) => eligibility !== "plan_ineligible")
-          // A failed issuer refresh leaves this provider uncached. Synchronous
-          // model resolution then keeps the call on router order instead of
-          // making CLI turn startup fail before fallback can apply.
+          // 签发方刷新失败会使此 provider 无缓存。同步
+          // 模型解析随后按路由顺序调用，而不是
+          // 在回退生效前就让 CLI 回合启动失败。
           .map(({ provider }) => ensureFreshToken(provider).catch(() => undefined)),
       );
     },
@@ -146,7 +146,7 @@ export function createConnectedTokenManager(
   };
 }
 
-/** A valid token can carry a model list captured before a family successor shipped. */
+/** 有效令牌可能携带在模型家族后继版本发布前捕获的模型列表。 */
 function hasRetiredModelAvailability(
   provider: ConnectedProviderId,
   credentials: OAuthCredentials,
@@ -171,10 +171,10 @@ const connectedStore = createConnectedProviderStore();
 const connectedTokens = createConnectedTokenManager({ store: connectedStore });
 
 /**
- * Run the provider's OAuth model hook against a resolved spec. Copilot
- * credentials rewrite the endpoint for Enterprise accounts and filter models
- * the account cannot serve; returns undefined when the account filters the
- * model out, and the unhooked spec when no credentials are loaded.
+ * 对已解析的规格执行 provider 的 OAuth 模型钩子。Copilot
+ * 凭据会为企业账户重写端点，并过滤账户无法
+ * 使用的模型；账户过滤掉该模型时返回 undefined，
+ * 未加载凭据时返回未经钩子处理的规格。
  */
 export function applyConnectedModelHook<T extends { id: string }>(
   provider: ConnectedProviderId,
@@ -182,8 +182,8 @@ export function applyConnectedModelHook<T extends { id: string }>(
 ): T | undefined {
   const credentials = connectedTokens.credentials(provider);
   if (!credentials) return model;
-  // Account-specific model availability belongs to the provider, via
-  // `filterModels`.
+  // 账户特定的模型可用性由 provider 通过
+  // `filterModels` 负责。
   const entry = connectedProviders().find((candidate) => candidate.id === provider);
   const filterModels = entry?.provider().filterModels;
   if (!filterModels) return model;
@@ -210,7 +210,7 @@ export function refreshConnectedTokenInBackground(provider: ConnectedProviderId)
   connectedTokens.refreshInBackground(provider);
 }
 
-/** Persist reconnect-needed eligibility without deleting or rewriting credentials. */
+/** 持久化需要重新连接的资格状态，而不删除或重写凭据。 */
 export async function markConnectedProviderReconnectNeeded(
   provider: ConnectedProviderId,
 ): Promise<void> {

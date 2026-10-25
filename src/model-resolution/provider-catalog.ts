@@ -7,19 +7,19 @@ import {
   refreshConnectedTokenInBackground,
 } from "../connected-providers/tokens.js";
 
-/** The published fields a missing model's contract can differ from its sibling's on. */
+/** 缺失模型的契约可与同系列模型不同的已发布字段。 */
 type PublishedContract = Partial<Pick<Model<Api>, "input" | "contextWindow" | "maxTokens">> & {
   cost?: Partial<Model<Api>["cost"]>;
 };
 
 interface MissingModelClone {
-  /** A shipped sibling whose transport, compat and reasoning shape the clone keeps. */
+  /** 已发布的同系列模型；克隆保留其传输方式、兼容性和推理结构。 */
   from: string;
   to: string;
   name: string;
   /**
-   * The contract each transport publishes, keyed by catalog provider. A
-   * provider left out gets no clone rather than another transport's numbers.
+   * 每种传输方式发布的契约，以目录 provider 为键。
+   * 未列出的 provider 不会获得克隆，而不是使用其他传输方式的数值。
    */
   byProvider: Partial<Record<string, PublishedContract>>;
 }
@@ -68,11 +68,11 @@ const LUNA_6_CONTRACT: PublishedContract = {
 };
 
 /**
- * Models a transport serves that pi-ai's catalog has not shipped, each cloned
- * from a shipped sibling with only the fields whose published contract differs.
+ * 传输方式已提供、但 pi-ai 目录尚未发布的模型，各自从
+ * 已发布的同系列模型克隆，仅覆盖已发布契约中不同的字段。
  *
- * An entry is a bug report against the catalog, deleted the moment it ships the
- * id. Without it the provider does not resolve the id at all.
+ * 每个条目都是针对目录的缺陷报告，目录发布该 id 时即删除。
+ * 没有它，provider 根本无法解析该 id。
  */
 const MISSING_MODEL_CLONES: readonly MissingModelClone[] = [
   {
@@ -155,9 +155,9 @@ const MISSING_MODEL_CLONES: readonly MissingModelClone[] = [
     },
   },
   {
-    // OpenRouter prices this router by the model it picks, so the shipped
-    // sibling's cost stands in: it keeps accounting conservative rather than
-    // free. The token cap follows the cheap model the router usually selects.
+    // OpenRouter 按该路由器选择的模型计费，因此使用已发布的
+    // 同系列模型成本代替：使记账保持保守，而非
+    // 免费。token 上限沿用路由器通常选择的低成本模型。
     from: "z-ai/glm-5.3",
     to: "typesafe/jev-router",
     name: "TypeSafe Jev Router",
@@ -171,7 +171,7 @@ const MISSING_MODEL_CLONES: readonly MissingModelClone[] = [
   },
 ];
 
-/** The catalog's spec for `provider:modelId`, or the clone standing in for one it lacks. */
+/** 目录中 `provider:modelId` 的规范，或替代缺失条目的克隆。 */
 export function catalogModel(provider: string, modelId: string): Model<Api> | undefined {
   return (
     shippedModel(provider, modelId) ??
@@ -187,8 +187,8 @@ function shippedModel(provider: string, modelId: string): Model<Api> | undefined
 }
 
 /**
- * Clones `provider` publishes a contract for and whose source it ships; any
- * other is dropped rather than guessed at.
+ * `provider` 已发布契约且提供源模型的克隆；
+ * 其他项直接丢弃，不作猜测。
  */
 export function missingCatalogModels(
   provider: string,
@@ -214,12 +214,12 @@ export function missingCatalogModels(
 }
 
 /**
- * The API key to send for a provider, resolved the way Relay Pi stores keys.
+ * 要发送给 provider 的 API 密钥，按 Relay Pi 的密钥存储方式解析。
  *
- * Connected providers (ChatGPT, Copilot) keep their token in Relay Pi's own store,
- * which pi-ai cannot see at all. And the api-dispatch `complete()` used for
- * structured output does no provider auth resolution whatsoever, so it needs
- * the key handed to it.
+ * 已连接 provider（ChatGPT、Copilot）将 token 保留在 Relay Pi 自有存储中，
+ * pi-ai 完全不可见。而用于结构化输出的 api-dispatch `complete()`
+ * 不执行任何 provider 认证解析，因此需要
+ * 将密钥直接传给它。
  */
 export function resolveProviderApiKey(provider: string): string | undefined {
   if (isConnectedProviderId(provider)) {

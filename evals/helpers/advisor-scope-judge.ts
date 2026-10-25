@@ -1,7 +1,7 @@
 import dedent from "dedent";
 import { judge } from "../../test/helpers/judge.js";
 
-/** Grade the implementation boundary, rather than particular scope vocabulary. */
+/** 评估实现边界，而不是特定的 scope 词汇。 */
 export async function judgeCookieFilterScope(advice: string) {
   return judge({
     prompt: dedent`

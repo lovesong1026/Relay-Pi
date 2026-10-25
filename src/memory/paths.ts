@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Directory name shared by Relay Pi's user-scoped runtime state. */
+/** Relay Pi 用户级 runtime state 共用的目录名。 */
 export const DEFAULT_RELAY_PI_DIR = ".relay-pi";
 export const RELAY_PI_HOME_ENV = "RELAY_PI_HOME";
 
@@ -17,5 +17,5 @@ export function resolveRelayPiHome(): string {
 
 export const DEFAULT_RELAY_PI_HOME = resolveRelayPiHome();
 export const DEFAULT_SESSION_STORAGE_DIR = join(DEFAULT_RELAY_PI_HOME, "sessions");
-/** Default observational-memory PGlite path. */
+/** 默认的 observational-memory PGlite 路径。 */
 export const DEFAULT_MEMORY_DB_PATH = join(DEFAULT_RELAY_PI_HOME, "memory.db");

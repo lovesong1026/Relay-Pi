@@ -19,12 +19,9 @@ import { basename, dirname, resolve as resolvePath, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
- * pgvector ships with PGlite as an opt-in WASM extension. We load it
- * unconditionally so every memory database can run hybrid retrieval
- * without a feature flag dance — the cost is one extra small WASM
- * download, paid once per install. `CREATE EXTENSION vector` then
- * succeeds inside migration v3 where the embedding tables and HNSW
- * index live.
+ * pgvector 作为可选 WASM extension 随 PGlite 提供。我们无条件加载它，使每个 memory database
+ * 都能运行 hybrid retrieval，无需 feature flag——代价是每次安装多下载一个小 WASM 文件。
+ * 每次 migration v3 创建 embedding table 和 HNSW index 时，`CREATE EXTENSION vector` 都会成功。
  */
 const vector = {
   ...upstreamVector,
@@ -35,7 +32,7 @@ const vector = {
 };
 const MEMORY_EXTENSIONS = { vector } as const;
 
-/** Files PGlite must load from the host filesystem when Relay Pi is a compiled executable. */
+/** Relay Pi 作为 compiled executable 时，PGlite 必须从 host filesystem 加载的文件。 */
 export const PGLITE_RUNTIME_ASSET_NAMES = [
   "pglite.data",
   "pglite.wasm",
@@ -43,7 +40,7 @@ export const PGLITE_RUNTIME_ASSET_NAMES = [
   "vector.tar.gz",
 ] as const;
 
-/** Basename of one required compiled-runtime PGlite sidecar. */
+/** 必需的 compiled-runtime PGlite sidecar 之一的 basename。 */
 export type PGliteRuntimeAssetName = (typeof PGLITE_RUNTIME_ASSET_NAMES)[number];
 
 type PGliteRuntimeOptions = Pick<
@@ -54,10 +51,9 @@ type PGliteRuntimeOptions = Pick<
 let pgliteRuntimeOptionsPromise: Promise<PGliteRuntimeOptions> | undefined;
 
 /**
- * Bun's single-file compiler retains an extension's `import.meta.url` inside
- * `$bunfs`, but PGlite loads extension archives through ordinary filesystem
- * URLs. Source/npm installs use the upstream archive directly; compiled
- * distributions place the same archive beside the executable as a sidecar.
+ * Bun 的 single-file compiler 会将 extension 的 `import.meta.url` 保留在 `$bunfs` 中，但 PGlite
+ * 通过普通 filesystem URL 加载 extension archive。Source/npm install 直接使用上游 archive；
+ * compiled distribution 将同一 archive 作为 sidecar 放在 executable 旁边。
  */
 export function resolvePGliteExtensionBundle(
   upstreamBundle: URL,
@@ -72,9 +68,9 @@ export function resolvePGliteExtensionBundle(
 }
 
 /**
- * Load PGlite's core assets from executable sidecars when present. Normal source and package
- * installs keep using PGlite's own import-relative URLs. A partial compiled distribution fails
- * clearly instead of falling through to an unreadable `$bunfs` path.
+ * 存在 executable sidecar 时从其中加载 PGlite core asset。普通 source 和 package install 继续使用
+ * PGlite 自己的 import-relative URL。Partial compiled distribution 会清晰失败，而不是回退到
+ * 不可读的 `$bunfs` path。
  */
 async function pgliteRuntimeOptions(): Promise<PGliteRuntimeOptions> {
   pgliteRuntimeOptionsPromise ??= loadPGliteRuntimeOptions(process.execPath);
@@ -109,34 +105,29 @@ async function loadPGliteRuntimeOptions(executablePath: string): Promise<PGliteR
 }
 
 /**
- * Filename used for the cross-process open-lock written into each
- * managed data directory. The first line is the holder's pid; other
- * processes only proceed past O_EXCL if that pid is no longer alive.
+ * 写入每个 managed data directory 的跨进程 open-lock 使用的文件名。第一行是持有者 pid；
+ * 其他进程只有在该 pid 已不再存活时才会越过 O_EXCL。
  */
 const OPEN_LOCK_FILE = ".relay-pi-open.lock";
 
 export interface OpenPGliteOptions {
   /**
-   * Async hook run immediately after the database opens, in the try block
-   * that triggers quarantine recovery. Typically applies schema migrations
-   * so a failure rolls the directory aside instead of leaving the agent
-   * wedged behind an opaque PGlite abort.
+   * 在 database 打开后立即运行的 async hook，处于会触发 quarantine recovery 的 try block 中。
+   * 通常用于应用 schema migration，使失败时目录移到一旁，而不是让 Agent 被不透明的 PGlite
+   * abort 卡住。
    */
   init?: (db: PGlite) => Promise<void>;
   /**
-   * Called once when an unreadable data directory is quarantined and a fresh
-   * one is opened in its place. Receives the path the old directory was moved
-   * to so callers can surface it. When omitted, a warning is written to
-   * stderr.
+   * 当不可读的 data directory 被 quarantine、并以 fresh directory 替代时调用一次。接收旧目录
+   * 被移动到的路径，以便调用方展示；省略时向 stderr 写入 warning。
    */
   onRecover?: (info: { backupPath: string; cause: unknown }) => void;
 }
 
 /**
- * Thrown when the cross-process open-lock could not be acquired within
- * the caller's wait budget. `MemorySession` catches this and degrades
- * gracefully (skips the op, warns once) so a second relay-pi CLI does not
- * crash when a long-running first CLI holds the memory db.
+ * 在调用方 wait budget 内无法获取跨进程 open-lock 时抛出。`MemorySession` 会捕获它并优雅退化
+ *（跳过 op，只 warning 一次），因此长时间运行的第一个 CLI 持有 memory db 时，第二个 relay-pi
+ * CLI 不会崩溃。
  */
 export class MemoryLockTimeoutError extends Error {
   readonly dataDir: string;
@@ -157,65 +148,46 @@ export class MemoryLockTimeoutError extends Error {
 export type TryAcquireOpenLockResult = { lockPath: string } | { holderPid: number };
 
 /**
- * Default wall-time budget used by `openPGliteWaitingForLock` and the `relay-pi memory` CLI when
- * polling for the cross-process open-lock. Long enough to outlast a moderate burst of writes
- * from a concurrent relay-pi process but bounded so a wedged peer cannot stall the caller
- * indefinitely.
+ * `openPGliteWaitingForLock` 和 `relay-pi memory` CLI 轮询跨进程 open-lock 时使用的默认 wall-time
+ * budget。足够撑过并发 relay-pi 进程的中等 write burst，但有界，因此卡住的 peer 不会无限期
+ * 阻塞调用方。
  */
 export const DEFAULT_OPEN_LOCK_WAIT_BUDGET_MS = 30_000;
 
 /**
- * Total wall-time we'll spend retrying opens on a structurally-intact cluster before
- * giving up and quarantining. Long enough to outlast a slow `npm install -g` rewrite
- * of `node_modules` (the only known transient failure mode that mimics corruption,
- * routinely 5-12s on cold caches), short enough to stay well under a typical agent
- * turn so a genuinely WAL-corrupted dataDir surfaces as a quarantine event in the
- * same session instead of disappearing into a longer-than-the-turn poll.
+ * 在结构完整的 cluster 上重试 open 的总 wall-time；超过后放弃并 quarantine。足够撑过缓慢的
+ * `npm install -g` 重写 `node_modules`（唯一已知的、会伪装成 corruption 的 transient failure，
+ * cold cache 通常需 5–12s），又远低于典型 Agent 回合，使真正 WAL-corrupted 的 dataDir 在同一
+ * Session 中作为 quarantine event 暴露，而不是消失在长于回合的 poll 里。
  */
 const RETRY_BEFORE_QUARANTINE_BUDGET_MS = 10_000;
 
-/**
- * Number of rotating on-disk backups we keep alongside the live dataDir. Each new
- * startup snapshots the dir (best-effort) so we always have a recent known-good
- * cluster to fall back on if PGlite can no longer open the current one. Five is
- * enough to span a few days of normal use without bloating `~/.relay-pi`.
- */
+/** 与 live dataDir 一起保留的磁盘轮转 backup 数。每次启动尽力 snapshot，因此 PGlite 无法再打开当前
+ * cluster 时总有近期的 known-good cluster 可回退。五个足以覆盖几天的正常使用，又不会撑大
+ * `~/.relay-pi`。 */
 const MAX_BACKUPS = 5;
 
-/**
- * Filename prefix used for rotating on-disk backups. Siblings to the live `memory.db`
- * directory, suffixed with an ISO timestamp so newest-first sort is plain lexicographic.
- */
+/** 轮转磁盘 backup 的文件名前缀。与 live `memory.db` 同级，并加 ISO timestamp 后缀，使从新到旧排序可直接使用 lexical 顺序。 */
 const BACKUP_SUFFIX_PREFIX = ".backup-";
 
 /**
- * Skip taking a startup snapshot if the most recent backup is younger than this.
- * MemorySession refcount-opens many times per turn; without dedupe we'd burn inodes
- * snapshotting on every acquire. Picked to be much shorter than typical inter-session
- * gaps so a fresh relay-pi launch after even a brief pause still gets a new backup.
+ * 如果最近的 backup 比此值更新，则跳过 startup snapshot。MemorySession 每回合会多次 refcount-open；
+ * 没有 dedupe 时每次 acquire 都会消耗 inode。该值比典型 Session 间隔短得多，因此 Relay Pi
+ * 即使短暂停顿后重新启动，也会获得新的 backup。
  */
 const BACKUP_DEDUPE_WINDOW_MS = 5 * 60 * 1_000;
 
-/**
- * Backoff schedule between retry attempts during the quarantine grace window.
- * Front-loaded (250ms, 500ms, 1s) so a fast upgrade is picked up quickly,
- * with a 2s ceiling so a long `npm install` does not produce a retry storm
- * before the budget elapses.
- */
+/** quarantine grace window 中 retry attempt 之间的 backoff schedule。前段（250ms、500ms、1s）
+ * 使快速升级很快恢复；上限 2s，避免长时间 `npm install` 在 budget 到期前造成 retry storm。 */
 const RETRY_BACKOFF_MS = [250, 500, 1_000, 2_000];
 
-/**
- * Exponential backoff schedule used by `pollAcquireOpenLock`. Doubles from 50ms up to a 1s
- * ceiling so a peer that releases the lock during an idle-close gap is picked up within ~50ms,
- * while a long-running peer does not produce a poll storm.
- */
+/** `pollAcquireOpenLock` 使用的指数 backoff schedule。从 50ms 翻倍到 1s 上限，使 idle-close 间隙
+ * 释放 lock 的 peer 能在约 50ms 内被发现，同时长时间运行的 peer 不会造成 poll storm。 */
 const POLL_BACKOFF_MS = [50, 100, 200, 400, 800, 1000];
 
 /**
- * Process-global registry of open-lock files currently held by this
- * process. Used by the exit handler to drop locks on crash so the next
- * launch (and concurrent relay-pi CLIs) are not blocked behind a stale
- * lock pointing at a no-longer-living pid.
+ * 当前进程持有的 open-lock 文件的 process-global registry。Exit handler 用它在 crash 时丢弃 lock，
+ * 使下一次启动（以及并发 relay-pi CLI）不会被指向已死亡 pid 的 stale lock 阻塞。
  */
 const heldLockPaths = new Set<string>();
 
@@ -228,30 +200,24 @@ function installExitCleanup(): void {
       try {
         unlinkSync(lockPath);
       } catch {
-        // Best-effort on exit; nothing to do if the file is already gone.
+        // exit 时尽力而为；文件已经不存在时无需处理。
       }
     }
   });
 }
 
 /**
- * Opens a PGlite database at `path`, recovering from three failure modes that
- * would otherwise leave the agent unable to start:
+ * 在 `path` 打开 PGlite database，恢复以下三种本来会阻止 Agent 启动的 failure mode：
  *
- *   1. A stale `postmaster.pid` left by a crashed prior run — the lock is
- *      removed when its PID is not a live process.
- *   2. A data directory PGlite cannot read at all (corrupted, partially
- *      written, or written by an incompatible Postgres version) — detected
- *      by running the init hook as a probe. The bad directory is renamed
- *      to `<path>.corrupted-<iso-timestamp>` so the user can recover it
- *      later, and a fresh database is opened in its place.
- *   3. A cross-process open-lock so two relay-pi CLIs cannot both call
- *      `PGlite.create` on the same fresh dataDir and corrupt each
- *      other's migrations.
+ *   1. 上次运行 crash 留下的 stale `postmaster.pid`——当其 PID 不属于存活进程时移除 lock。
+ *   2. PGlite 完全无法读取的 data directory（损坏、部分写入，或由不兼容 Postgres version 写入）——
+ *      通过运行 init hook 作为 probe 检测。坏目录改名为 `<path>.corrupted-<iso-timestamp>`，
+ *      供用户稍后恢复，并在其位置打开 fresh database。
+ *   3. 跨进程 open-lock，防止两个 relay-pi CLI 同时在同一 fresh dataDir 上调用 `PGlite.create`，
+ *      破坏彼此的 migration。
  *
- * Throws synchronously-via-reject if the lock is held by a live foreign
- * process. Callers that need to wait or degrade gracefully should use
- * `MemorySession` instead, which polls `tryAcquireOpenLock`.
+ * 如果 lock 由仍存活的 foreign process 持有，则以 reject 形式同步抛出。需要等待或优雅退化的
+ * 调用方应使用 `MemorySession`，它会轮询 `tryAcquireOpenLock`。
  */
 export async function openPGlite(path: string, options: OpenPGliteOptions = {}): Promise<PGlite> {
   installExitCleanup();
@@ -266,12 +232,11 @@ export async function openPGlite(path: string, options: OpenPGliteOptions = {}):
 }
 
 /**
- * Like `openPGlite` but polls `tryAcquireOpenLock` up to `waitBudgetMs` (default
- * `DEFAULT_OPEN_LOCK_WAIT_BUDGET_MS`) before giving up, so a short-lived CLI does not crash
- * when a peer relay-pi process is briefly holding the open-lock. Used by the `relay-pi memory`
- * subcommand; the runner's hot path uses `MemorySession` instead so it can refcount opens
- * across many ops. On budget exhaustion throws `MemoryLockTimeoutError` carrying the most
- * recently observed holder pid so callers can render a useful message.
+ * 类似 `openPGlite`，但以指数 backoff 轮询 `tryAcquireOpenLock`，最多等待 `waitBudgetMs`（默认
+ * `DEFAULT_OPEN_LOCK_WAIT_BUDGET_MS`），再放弃；因此短生命周期 CLI 在 peer relay-pi process
+ * 短暂持有 open-lock 时不会崩溃。由 `relay-pi memory` subcommand 使用；runner 的 hot path
+ * 使用 `MemorySession`，以便跨多个 op refcount open。预算耗尽时抛出 `MemoryLockTimeoutError`，
+ * 携带最近观察到的 holder pid，使调用方可以渲染有用的 message。
  */
 export async function openPGliteWaitingForLock(
   path: string,
@@ -290,10 +255,9 @@ export async function openPGliteWaitingForLock(
 }
 
 /**
- * Poll `tryAcquireOpenLock` with exponential backoff until either the lock is acquired or
- * `budgetMs` has elapsed. Shared by `MemorySession` (per-op acquire) and the `relay-pi memory`
- * CLI (single acquire for the lifetime of the TUI). Throws `MemoryLockTimeoutError` with the
- * most recently observed holder pid on exhaustion.
+ * 以指数 backoff 轮询 `tryAcquireOpenLock`，直到获取 lock 或 `budgetMs` 到期。由 `MemorySession`
+ *（每个 op 获取）和 `relay-pi memory` CLI（TUI 生命周期内单次获取）共享。耗尽时抛出
+ * `MemoryLockTimeoutError`，其中带最近观察到的 holder pid。
  */
 export async function pollAcquireOpenLock(dataDir: string, budgetMs: number): Promise<string> {
   const start = Date.now();
@@ -302,11 +266,9 @@ export async function pollAcquireOpenLock(dataDir: string, budgetMs: number): Pr
   while (true) {
     const result = tryAcquireOpenLock(dataDir);
     if ("lockPath" in result) return result.lockPath;
-    // Preserve the last *known* holder pid across retries: the
-    // stale-takeover subpath can momentarily report 0 when the file
-    // content is unparseable or the racer has already exited. We
-    // don't want that to clobber a real pid we observed earlier and
-    // surface "held by pid 0" in the eventual timeout error.
+    // 在 retry 之间保留最近一个*已知*的 holder pid：stale-takeover subpath 在文件内容无法解析或
+    // racer 已退出时，可能短暂报告 0。不要让它覆盖之前观察到的真实 pid，最终 timeout error
+    // 不应显示“held by pid 0”。
     if (result.holderPid > 0) lastHolderPid = result.holderPid;
     const elapsed = Date.now() - start;
     if (elapsed >= budgetMs) {
@@ -325,11 +287,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Open the database assuming the caller already holds `lockPath` for
- * the dataDir. On a quarantine recovery the directory is renamed
- * aside, the old lockPath disappears with it, and this returns the
- * freshly-reacquired lockPath. `MemorySession` uses this so its
- * poll-acquire loop owns the lock lifecycle end-to-end.
+ * 假设调用方已经为 dataDir 持有 `lockPath`，打开 database。Quarantine recovery 时目录会移到
+ * 一旁，旧 lockPath 随之消失；函数返回重新获取的 lockPath。`MemorySession` 使用它，使自己的
+ * poll-acquire loop 端到端拥有 lock lifecycle。
  */
 export async function openPGliteHoldingLock(
   path: string,
@@ -342,52 +302,40 @@ export async function openPGliteHoldingLock(
 
   try {
     const db = await openAndProbe(path, options.init);
-    // Snapshot the cluster after a successful open + init so every entry in
-    // the backup pool is verified-readable. Snapshotting before open would
-    // happily copy a WAL-corrupted dataDir into the pool and rotate out the
-    // last good copy, defeating the rotation. CHECKPOINT first so the on-disk
-    // bytes match the in-memory state PGlite just validated. Best-effort:
-    // checkpoint and copy failures are warned about but never block startup.
+    // 成功 open + init 后 snapshot cluster，确保 backup pool 中每个 entry 都可验证读取。在 open 前
+    // snapshot 会把 WAL-corrupted dataDir 复制进 pool，并轮转掉最后一个 good copy，抵消 rotation。
+    // 先 CHECKPOINT，使磁盘字节与 PGlite 刚验证的内存状态一致。尽力而为：checkpoint 和 copy
+    // 失败只 warning，不阻塞 startup。
     await snapshotAfterSuccessfulOpen(db, path);
     return { db, lockPath };
   } catch (error) {
     if (!isExistingDirectory(path)) throw error;
-    // Do not quarantine when the failure is about something outside the
-    // user's dataDir — typically a PGlite runtime asset missing from
-    // node_modules during a self-update (e.g. ENOENT on `pglite.data`).
-    // Renaming the perfectly healthy memory.db aside in that window has
-    // burned real users; let the error surface so the next launch (with
-    // node_modules fully unpacked) succeeds against the existing data.
+    // 如果失败涉及用户 dataDir 之外的内容，不要 quarantine——通常是 self-update 期间 node_modules
+    // 缺少 PGlite runtime asset（例如 `pglite.data` 的 ENOENT）。此时将完全健康的 memory.db
+    // 移到一旁曾让真实用户受损；让错误直接暴露，使下一次 launch（node_modules 完整解包后）
+    // 可以针对现有 data 继续成功。
     if (isExternalAssetError(error, path)) throw error;
-    // Retry-then-quarantine for the structurally-intact case. A `relay-pi
-    // upgrade` running concurrently with another relay-pi CLI rewrites
-    // node_modules mid-flight, and the still-running relay-pi's reopen can
-    // surface failure shapes that are not strictly ENOENT (a half-written
-    // wasm/data file appears as a `WebAssembly.CompileError`, a
-    // `RangeError`, or an ENOENT without a parseable path). These all
-    // resolve on their own once npm finishes, so polling for a tolerant
-    // window distinguishes them from genuine data corruption (WAL torn by
-    // a kill mid-write), which fails deterministically on every attempt.
-    // We only run the retry loop when the on-disk cluster *looks* intact
-    // (PG_VERSION + required subdirs present) so a clearly broken layout
-    // still quarantines immediately on the first failure.
+    // 结构完整的场景采用 retry-then-quarantine。并发运行的 `relay-pi upgrade` 与另一个 relay-pi
+    // CLI 会在中途重写 node_modules，仍在运行的 relay-pi reopen 可能暴露并非严格 ENOENT 的
+    // failure shape（部分写入的 wasm/data file 表现为 `WebAssembly.CompileError`、`RangeError`，
+    // 或没有可解析 path 的 ENOENT）。npm 完成后这些都会自行恢复，因此在容忍窗口内轮询，可将
+    // 它们与真正的 data corruption（write 中途被 kill 导致 WAL torn，每次 attempt 都确定失败）区分开。
+    // 只有磁盘上的 cluster 看起来完整（存在 PG_VERSION + required subdir）时才重试；明显损坏的
+    // layout 仍会在第一次失败时立即 quarantine。
     if (looksLikeIntactPGliteDirectory(path)) {
       const opened = await retryOpenWhileIntact(path, options.init);
       if (opened) return { db: opened, lockPath };
-      // Every attempt within the grace window failed — treat as genuine
-      // corruption and fall through to recovery using the original
-      // error as the cause.
+      // grace window 内每次 attempt 都失败——视为真实 corruption，并以原始 error 作为 cause
+      // 继续 recovery。
     }
 
-    // Release the lock before renaming the directory aside — the lock
-    // file lives inside that directory and would be moved with it.
+    // 在把 directory 移到一旁前释放 lock——lock file 位于该 directory 内，会随目录一起移动。
     releaseOpenLock(lockPath);
 
-    // Before quarantining + starting fresh, try restoring from rotating backups.
-    // Walk newest-first; each candidate is verified by actually opening it.
-    // On success the unreadable live dir is quarantined and the restored
-    // backup takes its place, so the user keeps their memory instead of
-    // starting from an empty db.
+    // quarantine 并从 fresh 状态启动前，尝试从轮转 backup 恢复。
+    // 按最新优先遍历；每个候选都通过实际打开来验证。
+    // 成功时先 quarantine 不可读的 live dir，再让恢复的 backup 占据其位置，使用户保留 memory，
+    // 而不是从空 database 开始。
     const restored = await tryRestoreFromBackup(path, options.init);
     if (restored) {
       if (options.onRecover) {
@@ -421,11 +369,9 @@ export async function openPGliteHoldingLock(
 }
 
 /**
- * Wrap `db.close` so the cross-process lock is released alongside the
- * handle. PGlite uses private class fields internally, so a Proxy
- * around the instance breaks every method that touches one — method
- * replacement preserves identity and keeps private-field access
- * working.
+ * 包装 `db.close`，使跨进程 lock 与 handle 一起释放。PGlite 内部使用 private class field，围绕
+ * instance 的 Proxy 会破坏所有触碰 private field 的方法——替换 method 能保留 identity，并继续
+ * 正常访问 private field。
  */
 function installLockReleasingClose(db: PGlite, lockPath: string): PGlite {
   const originalClose = db.close.bind(db);
@@ -443,13 +389,11 @@ function installLockReleasingClose(db: PGlite, lockPath: string): PGlite {
 }
 
 /**
- * Poll `openAndProbe` for up to `RETRY_BEFORE_QUARANTINE_BUDGET_MS` while the on-disk
- * cluster keeps looking intact. Returns the opened db on success, or `undefined` when
- * the budget elapses (the caller then quarantines). External-asset ENOENTs short-circuit
- * the loop — they signal a node_modules-side problem the retry cannot fix, and surfacing
- * them as-is lets the user act on the real failure instead of waiting out the full budget
- * to no effect. If the directory layout becomes structurally broken during the loop (e.g.
- * a peer process truncated it), we also bail so quarantine can run.
+ * 在磁盘 cluster 看起来完整期间，最多以 `RETRY_BEFORE_QUARANTINE_BUDGET_MS` 轮询
+ * `openAndProbe`。成功返回打开的 db，budget 到期时返回 `undefined`（调用方随后 quarantine）。
+ * External-asset ENOENT 会短路循环——这是 node_modules 侧 retry 无法修复的问题；原样暴露让用户
+ * 处理真实 failure，而不是无效等待完整 budget。如果循环中 directory layout 结构损坏（例如
+ * peer process 截断了它），也退出，以便执行 quarantine。
  */
 async function retryOpenWhileIntact(
   path: string,
@@ -467,7 +411,7 @@ async function retryOpenWhileIntact(
     } catch (retryError) {
       if (isExternalAssetError(retryError, path)) throw retryError;
       if (!looksLikeIntactPGliteDirectory(path)) return undefined;
-      // Otherwise loop and try again until the budget elapses.
+      // 否则继续循环，直到 budget 到期。
     }
   }
 }
@@ -476,10 +420,9 @@ async function openAndProbe(
   path: string,
   init: ((db: PGlite) => Promise<void>) | undefined,
 ): Promise<PGlite> {
-  // PGlite.create is the only API path that lets us register loadable
-  // extensions at construction time — the bare `new PGlite(path)` form
-  // skips the extension registry, leaving `CREATE EXTENSION vector` to
-  // fail with "extension is not available" once migration v3 runs.
+  // PGlite.create 是唯一允许在构造时注册可加载 extension 的 API 路径——裸的 `new PGlite(path)`
+  // 会跳过 extension registry，导致 migration v3 运行时 `CREATE EXTENSION vector` 失败并报
+  // “extension is not available”。
   const db = await PGlite.create({
     dataDir: path,
     extensions: MEMORY_EXTENSIONS,
@@ -489,25 +432,22 @@ async function openAndProbe(
     if (init) await init(db);
     return db;
   } catch (error) {
-    // The wasm module is in an aborted state on this kind of failure; closing
-    // it can itself throw. Best-effort only — we just want to stop holding
-    // any handle before we rename the directory out from under it.
+    // 这类 failure 会使 wasm module 处于 aborted state；close 自身也可能抛出。这里只尽力而为——
+    // 目标是在从其下方重命名 directory 前停止持有任何 handle。
     try {
       await db.close();
     } catch {
-      // ignore
+      // 忽略。
     }
     throw error;
   }
 }
 
 /**
- * Open a managed PGlite handle without running migrations or quarantining
- * on read failure. Used by the recovery tooling to read rows out of a
- * previously-quarantined `memory.db.corrupted-*` directory.
+ * 打开 managed PGlite handle，但不运行 migration，也不因 read failure quarantine。Recovery tooling 用它
+ * 从之前 quarantine 的 `memory.db.corrupted-*` directory 读取 row。
  *
- * Does not participate in the open-lock machinery; the caller owns the
- * returned instance and is responsible for `close()`.
+ * 不参与 open-lock machinery；调用方拥有返回的 instance，并负责调用 `close()`。
  */
 export async function openForRecovery(path: string): Promise<PGlite> {
   clearStalePostmasterLock(path);
@@ -519,12 +459,10 @@ export async function openForRecovery(path: string): Promise<PGlite> {
 }
 
 /**
- * True when an open failure points at a filesystem path that is not under
- * `dataDir` — i.e. the dataDir itself is fine and PGlite stumbled on one of
- * its own bundled runtime files (the canonical case is `pglite.data` being
- * momentarily missing while `npm` is rewriting `node_modules` during a relay-pi
- * self-update). Used to suppress quarantine so we never move a healthy
- * memory.db aside because of a transient packaging error.
+ * 当 open failure 指向不在 `dataDir` 下的 filesystem path 时为 true——dataDir 本身正常，PGlite
+ * 却撞上自己的 bundled runtime file（典型情况是 relay-pi self-update 重写 node_modules 时，
+ * `pglite.data` 暂时缺失）。用于抑制 quarantine，避免因 transient packaging error 将健康的
+ * memory.db 移到一旁。
  */
 export function isExternalAssetError(error: unknown, dataDir: string): boolean {
   if (!error || typeof error !== "object") return false;
@@ -533,8 +471,8 @@ export function isExternalAssetError(error: unknown, dataDir: string): boolean {
   const candidates: string[] = [];
   if (typeof errno.path === "string") candidates.push(errno.path);
   if (typeof errno.message === "string") {
-    // PGlite re-throws fs errors with the path embedded in the message but
-    // not always on `.path`; pull anything that looks absolute out of it.
+    // PGlite 会在 message 中嵌入 path 重抛 fs error，但不一定写入 `.path`；从 message 中提取看起来
+    // 是绝对路径的部分。
     const match = errno.message.match(/['"]([^'"]+)['"]/);
     if (match?.[1]) candidates.push(match[1]);
   }
@@ -547,18 +485,16 @@ export function isExternalAssetError(error: unknown, dataDir: string): boolean {
 }
 
 /**
- * Subdirectories every PGlite cluster on disk has. If all of these plus a
- * parseable `PG_VERSION` are present, the dataDir's on-disk layout is
- * intact and any open failure is environmental (mid-upgrade asset rewrite,
- * permissions, WASM load) rather than data corruption.
+ * 每个磁盘上的 PGlite cluster 都有的子目录。如果这些目录和可解析的 `PG_VERSION` 都存在，
+ * dataDir 的磁盘 layout 完整；open failure 是环境问题（升级中的 asset rewrite、权限、WASM load），
+ * 而非 data corruption。
  */
 const REQUIRED_PGLITE_SUBDIRS = ["base", "global", "pg_wal"] as const;
 
 /**
- * True when `path` looks like a valid PGlite cluster: it contains a
- * non-empty `PG_VERSION` and every directory PGlite needs to bootstrap a
- * cluster. Used as a quarantine guard so an upgrade-time WASM/data load
- * failure cannot move a healthy memory.db aside. Exported for testing.
+ * 当 `path` 看起来是有效的 PGlite cluster 时为 true：包含非空 `PG_VERSION` 以及 PGlite bootstrap
+ * cluster 所需的每个目录。作为 quarantine guard 使用，防止升级期间的 WASM/data load failure
+ * 将健康的 memory.db 移到一旁。导出供测试使用。
  */
 export function looksLikeIntactPGliteDirectory(path: string): boolean {
   if (!isExistingDirectory(path)) return false;
@@ -569,9 +505,8 @@ export function looksLikeIntactPGliteDirectory(path: string): boolean {
 }
 
 /**
- * List rotating backup directories that sit alongside the live dataDir.
- * Returns absolute paths sorted newest-first by lexicographic timestamp.
- * Exported for testing.
+ * 列出与 live dataDir 同级的轮转 backup directory。返回按 timestamp lexical 顺序从新到旧排列的
+ * absolute path。导出供测试使用。
  */
 export function listBackups(path: string): string[] {
   const dir = dirname(path);
@@ -592,13 +527,10 @@ export function listBackups(path: string): string[] {
 }
 
 /**
- * Take a best-effort snapshot of `path` for later restoration. Called only
- * after a successful open + init so each entry in the rotation is
- * verified-readable. CHECKPOINT first to flush dirty buffers so the on-disk
- * bytes match the in-memory state PGlite just validated. No-ops when a recent
- * backup already exists within the dedupe window (MemorySession refcount-opens
- * would otherwise burn inodes on every acquire). Prunes to `MAX_BACKUPS`
- * newest. Errors at any step are warned about but never block startup.
+ * 尽力 snapshot `path`，供之后恢复。仅在成功 open + init 后调用，因此 rotation 中每个 entry 都
+ * 可验证读取。先 CHECKPOINT 刷出 dirty buffer，使磁盘字节与 PGlite 刚验证的内存状态一致。
+ * 如果 dedupe window 内已有 recent backup 则不操作（MemorySession refcount-open 否则会在每次
+ * acquire 消耗 inode）。裁剪到最新的 `MAX_BACKUPS` 个。任何步骤失败只 warning，绝不阻塞 startup。
  */
 async function snapshotAfterSuccessfulOpen(db: PGlite, path: string): Promise<void> {
   try {
@@ -610,19 +542,18 @@ async function snapshotAfterSuccessfulOpen(db: PGlite, path: string): Promise<vo
           const age = Date.now() - statSync(newest).mtimeMs;
           if (age < BACKUP_DEDUPE_WINDOW_MS) return;
         } catch {
-          // If we can't stat the newest backup, fall through and take a new one.
+          // 无法 stat 最新 backup 时，继续执行并创建新的 backup。
         }
       }
     }
     try {
       await db.exec("CHECKPOINT");
     } catch {
-      // Checkpoint failures should not block the snapshot — the WAL on disk
-      // is still self-consistent, the copy just may be slightly stale.
+      // Checkpoint 失败不应阻塞 snapshot——磁盘上的 WAL 仍自洽，copy 只是可能略旧。
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backup = `${path}${BACKUP_SUFFIX_PREFIX}${stamp}`;
-    // `cp -r` semantics; on APFS this uses clonefile so 60MB is near-instant.
+    // `cp -r` 语义；在 APFS 上使用 clonefile，因此 60MB 几乎立即完成。
     cpSync(path, backup, { recursive: true });
     pruneOldBackups(path);
   } catch (error) {
@@ -637,18 +568,16 @@ function pruneOldBackups(path: string): void {
     try {
       rmSync(stale, { recursive: true, force: true });
     } catch {
-      // Best-effort prune; the next startup will try again.
+      // 尽力裁剪；下一次 startup 会再次尝试。
     }
   }
 }
 
 /**
- * Try restoring `path` from the rotating backups, newest-first. For each
- * candidate: move the unreadable live dir aside, move the backup into place,
- * acquire a fresh open-lock, and verify by actually opening + probing the
- * restored dir. Returns the opened db + the path the unreadable live dir was
- * quarantined to on success. On failure rolls the swap back and tries the next
- * backup. Returns undefined when no backup yields a readable db.
+ * 按最新优先从轮转 backup 恢复 `path`。对每个 candidate：将不可读的 live dir 移到一旁，将
+ * backup 移到原位置，获取新的 open-lock，并通过实际打开 + probe 验证恢复的 dir。成功时返回
+ * 打开的 db 以及原始不可读 live dir 被 quarantine 到的路径。失败则回滚 swap，并尝试下一个
+ * backup。没有 backup 能得到可读 db 时返回 undefined。
  */
 async function tryRestoreFromBackup(
   path: string,
@@ -662,18 +591,17 @@ async function tryRestoreFromBackup(
     try {
       quarantinedPath = quarantineDataDirectory(path);
     } catch {
-      // If we can't quarantine the live dir, no point continuing with this
-      // candidate or any other; surface to the caller's quarantine path.
+      // 无法 quarantine live dir 时，继续任何 candidate 都没有意义；交给调用方的 quarantine path 处理。
       return undefined;
     }
     try {
       renameSync(candidate, path);
     } catch {
-      // Swap back the live dir; try the next candidate.
+      // Swap 回 live dir；尝试下一个 candidate。
       try {
         renameSync(quarantinedPath, path);
       } catch {
-        // Live dir is now lost; let the caller's fresh-start path handle it.
+        // Live dir 现在已丢失；让调用方的 fresh-start path 处理。
       }
       continue;
     }
@@ -688,19 +616,17 @@ async function tryRestoreFromBackup(
         throw verifyError;
       }
     } catch {
-      // This backup did not open either. Swap the original unreadable dir
-      // back into place so the next candidate (or the caller's fresh-start
-      // fallback) sees the same state we started with.
+      // 这个 backup 也无法打开。将原始不可读目录 swap 回去，使下一个 candidate（或调用方的
+      // fresh-start fallback）看到我们开始时的同一状态。
       try {
         renameSync(path, `${candidate}.failed-${Date.now()}`);
       } catch {
-        // If we can't move the failed candidate aside, leave it; the next
-        // iteration's rename(path, quarantinedPath) will still succeed.
+        // 无法将失败的 candidate 移到一旁时保留它；下一轮的 `rename(path, quarantinedPath)` 仍会成功。
       }
       try {
         renameSync(quarantinedPath, path);
       } catch {
-        // Couldn't restore original state; bail and let caller quarantine.
+        // 无法恢复原始状态；退出，让调用方 quarantine。
         return undefined;
       }
     }
@@ -708,10 +634,7 @@ async function tryRestoreFromBackup(
   return undefined;
 }
 
-/**
- * Renames a presumed-corrupt data directory aside so a fresh database can be
- * created in its place. Returns the new path. Exported for testing.
- */
+/** 将疑似损坏的 data directory 改名移到一旁，以便在其位置创建 fresh database。返回新路径。导出供测试使用。 */
 export function quarantineDataDirectory(path: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backup = `${path}.corrupted-${stamp}`;
@@ -720,14 +643,11 @@ export function quarantineDataDirectory(path: string): string {
 }
 
 /**
- * Peek at `<dataDir>/.relay-pi-open.lock` without touching it. Returns the
- * holder pid when a live *foreign* process owns the lock, `null`
- * otherwise (file missing, our own pid, unparseable contents, or a dead
- * pid we would treat as stale on the next acquire). Used by
- * auto-upgrade to skip itself when another relay-pi CLI is already using
- * the memory db — npm rewriting `node_modules` mid-flight is the
- * documented trigger for the `memory.db.corrupted-*` recovery path, so
- * the safe default is to not upgrade at all when a peer holds the db.
+ * 不触碰 `<dataDir>/.relay-pi-open.lock`，只读取其内容。live *foreign* process 持有 lock 时返回
+ * holder pid；其他情况（文件缺失、自己的 pid、内容无法解析，或死掉的 pid——下次 acquire 会按
+ * stale 处理）返回 `null`。Auto-upgrade 用它在另一个 relay-pi CLI 已使用 memory db 时跳过升级——
+ * npm 在运行中重写 node_modules 是 `memory.db.corrupted-*` recovery path 的既定触发条件，
+ * 因此 peer 持有 db 时安全默认是完全不 upgrade。
  */
 export function peekOpenLockHolderPid(dataDir: string): number | null {
   const lockPath = join(dataDir, OPEN_LOCK_FILE);
@@ -742,11 +662,9 @@ export function peekOpenLockHolderPid(dataDir: string): number | null {
 }
 
 /**
- * Try once to acquire the cross-process open-lock at
- * `<dataDir>/.relay-pi-open.lock`. Returns `{ lockPath }` on success
- * (including after a stale-pid takeover) or `{ holderPid }` when a live
- * foreign process still holds the lock. Never throws on contention so
- * callers can poll and retry without try/catch.
+ * 尝试一次获取 `<dataDir>/.relay-pi-open.lock` 的跨进程 lock。成功（包括接管 stale pid 后）返回
+ * `{ lockPath }`；仍由 live foreign process 持有时返回 `{ holderPid }`。竞争时绝不抛出，使调用方
+ * 可以轮询重试，而无需 try/catch。
  */
 export function tryAcquireOpenLock(dataDir: string): TryAcquireOpenLockResult {
   mkdirSync(dataDir, { recursive: true });
@@ -758,8 +676,7 @@ export function tryAcquireOpenLock(dataDir: string): TryAcquireOpenLockResult {
     return { lockPath: created };
   }
 
-  // Lock file existed. If a live foreign process owns it, report back
-  // without taking it; otherwise treat it as stale and steal it.
+  // Lock file 已存在。如果 live foreign process 拥有它，返回信息但不接管；否则视为 stale 并窃取。
   const contents = tryReadFile(lockPath) ?? "";
   const firstLine = contents.split("\n", 1)[0]?.trim() ?? "";
   const holderPid = Number.parseInt(firstLine, 10);
@@ -772,8 +689,8 @@ export function tryAcquireOpenLock(dataDir: string): TryAcquireOpenLockResult {
     return { holderPid };
   }
 
-  // Stale (crashed prior run) or our own pid from a partially-cleaned
-  // failed open. Replace atomically — unlink-then-create-with-O_EXCL.
+  // 这是 stale（之前的 run 已 crash）或部分清理的 failed open 留下的自己的 pid。原子替换——
+  // unlink 后使用 O_EXCL 创建。
   try {
     unlinkSync(lockPath);
   } catch (error) {
@@ -781,12 +698,9 @@ export function tryAcquireOpenLock(dataDir: string): TryAcquireOpenLockResult {
   }
   const recreated = createLockFile(lockPath);
   if (!recreated) {
-    // Another opener won the race after our stale-lock takeover. Even
-    // if the new holder has already exited by the time we read the
-    // file (which happens with bursts of short-lived openers churning
-    // through the same dataDir), we treat this as contention and let
-    // the caller re-poll — throwing here would abort an otherwise
-    // healthy session for what is effectively "try again in 50ms".
+    // stale-lock takeover 后另一个 opener 赢得 race。即使读取文件时新 holder 已退出（短生命周期
+    // opener burst 频繁 churn 同一 dataDir 时会发生），仍视为 contention 并让调用方重新 poll——
+    // 这里抛出会使健康 Session 因实际上只是“50ms 后重试”而 abort。
     const afterContents = tryReadFile(lockPath) ?? "";
     const after = Number.parseInt(afterContents.split("\n", 1)[0]?.trim() ?? "", 10);
     const reportedPid = Number.isFinite(after) && after > 0 ? after : 0;
@@ -797,9 +711,8 @@ export function tryAcquireOpenLock(dataDir: string): TryAcquireOpenLockResult {
 }
 
 /**
- * Acquire the cross-process open-lock, throwing if a live foreign
- * process holds it. Used by `openPGlite` for the fast/strict path;
- * polling callers should use `tryAcquireOpenLock` instead.
+ * 获取跨进程 open-lock；live foreign process 持有时抛出。`openPGlite` 的 fast/strict path 使用；
+ * polling caller 应使用 `tryAcquireOpenLock`。
  */
 export function acquireOpenLock(dataDir: string): string {
   const result = tryAcquireOpenLock(dataDir);
@@ -811,9 +724,7 @@ export function acquireOpenLock(dataDir: string): string {
 }
 
 /**
- * Release a lock previously returned by `tryAcquireOpenLock` /
- * `acquireOpenLock`. Idempotent and safe to call if the file has
- * already disappeared.
+ * 释放之前由 `tryAcquireOpenLock` / `acquireOpenLock` 返回的 lock。幂等；文件已经消失时也安全。
  */
 export function releaseOpenLock(lockPath: string): void {
   heldLockPaths.delete(lockPath);
@@ -841,9 +752,8 @@ function createLockFile(lockPath: string): string | undefined {
 }
 
 /**
- * If `dataDir` contains a `postmaster.pid` whose PID is not a live process,
- * remove the lock so PGlite can start. If the PID is alive, throw with a clear
- * message rather than letting PGlite abort opaquely. Exported for testing.
+ * 如果 `dataDir` 包含 `postmaster.pid`，且其中 PID 不属于存活进程，则移除 lock 使 PGlite 可以
+ * 启动。如果 PID 存活，则抛出清晰错误，而不是让 PGlite 不透明地 abort。导出供测试使用。
  */
 export function clearStalePostmasterLock(dataDir: string): void {
   if (!isExistingDirectory(dataDir)) return;
@@ -892,8 +802,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-// Internal: lets tests reach into the held-lock registry to assert
-// exit cleanup behavior without exporting it on the public surface.
+// Internal：让测试访问 held-lock registry，以断言 exit cleanup 行为，而不在 public surface 导出它。
 export const __testing = {
   heldLockPaths,
   resolvePath,

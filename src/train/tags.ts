@@ -1,27 +1,26 @@
 /**
- * The tag scheme every `relay-pi train` row carries, owned in one place so the
- * create/replace path and the list/show/update/delete commands agree on it.
+ * 每个 `relay-pi train` row 都携带的标签方案集中定义于此，确保创建/替换路径与
+ * list/show/update/delete 命令使用同一方案。
  *
- * Each trained observation is tagged with both `TRAIN_TAG` (marks the row as
- * train-managed) and `trainSlugTag(slug)` (the per-corpus identity). The slug
- * is the stable, user-facing handle: the CRUD commands resolve a slug to its
- * row via these helpers rather than exposing the internal `mem_…` id.
+ * 每条训练 observation 同时带有 `TRAIN_TAG`（标记该 row 由 train 管理）和
+ * `trainSlugTag(slug)`（corpus 的身份）。slug 是稳定且面向用户的句柄：CRUD 命令
+ * 通过这些 helper 将 slug 解析为对应 row，而不是暴露内部的 `mem_…` id。
  */
 export const TRAIN_TAG = "train";
 
 const TRAIN_SLUG_PREFIX = "train:";
 
-/** The per-corpus identity tag, e.g. `train:acme-research`. */
+/** 每个 corpus 的身份标签，例如 `train:acme-research`。 */
 export function trainSlugTag(slug: string): string {
   return `${TRAIN_SLUG_PREFIX}${slug}`;
 }
 
-/** True when the observation is a `relay-pi train` row. */
+/** observation 是 `relay-pi train` row 时返回 true。 */
 export function isTrainTagged(tags: readonly string[]): boolean {
   return tags.includes(TRAIN_TAG);
 }
 
-/** Extract the slug from a train row's tags, or `undefined` if none is present. */
+/** 从 train row 的标签中提取 slug；不存在时返回 `undefined`。 */
 export function slugFromTags(tags: readonly string[]): string | undefined {
   return tags.find((tag) => tag.startsWith(TRAIN_SLUG_PREFIX))?.slice(TRAIN_SLUG_PREFIX.length);
 }

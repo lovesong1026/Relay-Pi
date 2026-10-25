@@ -222,54 +222,54 @@ export interface StateMachineBaseState {
 export interface StateMachineAgentState extends StateMachineBaseState {
   kind: "agent";
   /**
- * 发送给子 Agent 的用户 prompt。parent runner 选择此状态时，会使用转换 input 将其渲染为模板。
- */
+   * 发送给子 Agent 的用户 prompt。parent runner 选择此状态时，会使用转换 input 将其渲染为模板。
+   */
   prompt: string;
   /**
- * 只追加到此子 Agent 基础 system prompt 的可选 system prompt。用于持久化角色或行为指令；
- * 动态状态 input 应放在 `prompt` 中。
- */
+   * 只追加到此子 Agent 基础 system prompt 的可选 system prompt。用于持久化角色或行为指令；
+   * 动态状态 input 应放在 `prompt` 中。
+   */
   systemPrompt?: string;
   /**
- * 此子 Agent 的可选 skill allowlist。设置后只将这些已发现或显式配置的 skill 注入子 Agent
- * system prompt。
- */
+   * 此子 Agent 的可选 skill allowlist。设置后只将这些已发现或显式配置的 skill 注入子 Agent
+   * system prompt。
+   */
   allowedSkills?: string[];
   /**
- * 此子 Agent 编程工具（bash、read、write、edit）的工作目录。默认使用状态机 Session cwd。
- * 如果状态应在不同 repository 或子目录中工作，请设置这里。
- */
+   * 此子 Agent 编程工具（bash、read、write、edit）的工作目录。默认使用状态机 Session cwd。
+   * 如果状态应在不同 repository 或子目录中工作，请设置这里。
+   */
   cwd?: string;
   /**
- * 此子 Agent 的精确 model，可以是 shorthand（例如 "opus-5.5"）或 provider:modelId。
- * 未设置时继承 parent runner 的 model。它有意不暴露给 create_state_machine_definition 或
- * select_state_machine_state 的 override：编排模型不知道可用 model catalog，不应自行选择 model。
- * 此值由 UI 设置，UI 可以展示真实 model 列表。未知值会像错误的 CLI --model 一样在
- * resolveModelName 处失败。
- */
+   * 此子 Agent 的精确 model，可以是 shorthand（例如 "opus-5.5"）或 provider:modelId。
+   * 未设置时继承 parent runner 的 model。它有意不暴露给 create_state_machine_definition 或
+   * select_state_machine_state 的 override：编排模型不知道可用 model catalog，不应自行选择 model。
+   * 此值由 UI 设置，UI 可以展示真实 model 列表。未知值会像错误的 CLI --model 一样在
+   * resolveModelName 处失败。
+   */
   model?: string;
   /**
- * 此子 Agent 的 reasoning effort。与 `model` 采用相同的 UI-only 契约：不出现在工具 schema 中，
- * 因此编排模型无法设置它，由 UI 写入。未设置时继承 parent runner 的 thinking level。
- */
+   * 此子 Agent 的 reasoning effort。与 `model` 采用相同的 UI-only 契约：不出现在工具 schema 中，
+   * 因此编排模型无法设置它，由 UI 写入。未设置时继承 parent runner 的 thinking level。
+   */
   thinkingLevel?: ThinkingLevel;
   /**
- * 此子 Agent 是否从 parent runner 对话上下文的副本开始，而不是使用全新的空 transcript。
- *
- * `false`（默认，也是历史行为）时，子 Agent 只看到本状态渲染后的 `prompt`、worker identity
- * system-prompt 层和传入的转换 `input`。适合范围明确、自包含的任务，此时清晰的 prompt 已足够，
- * 既有上下文反而会分散注意力或造成偏置。
- *
- * `true` 时，runner 用 parent runner 完整上下文的逐字副本为子 Agent 提供历史，包括 parent
- * system prompt 和 message history，使子 Agent 继承此前讨论、决定、约束和工具 history。为
- * 控制成本，fork 保留 parent 的精确缓存前缀（相同 system prompt 和前导 messages），所有
- * 状态专属内容——worker identity 层、该状态的 `systemPrompt` 和自身 `prompt`——作为唯一
- * 未缓存的新尾部 user turn 发送。任务依赖先前 thread 决定或用户偏好，且通过状态 prompt
- * 重述会繁琐或有损时，才使用它。
- *
- * fork transcript 是临时的：不会写入状态机 Session history（只写入状态的紧凑最终输出），
- * 因此 fork 不会让 durable Session 膨胀。
- */
+   * 此子 Agent 是否从 parent runner 对话上下文的副本开始，而不是使用全新的空 transcript。
+   *
+   * `false`（默认，也是历史行为）时，子 Agent 只看到本状态渲染后的 `prompt`、worker identity
+   * system-prompt 层和传入的转换 `input`。适合范围明确、自包含的任务，此时清晰的 prompt 已足够，
+   * 既有上下文反而会分散注意力或造成偏置。
+   *
+   * `true` 时，runner 用 parent runner 完整上下文的逐字副本为子 Agent 提供历史，包括 parent
+   * system prompt 和 message history，使子 Agent 继承此前讨论、决定、约束和工具 history。为
+   * 控制成本，fork 保留 parent 的精确缓存前缀（相同 system prompt 和前导 messages），所有
+   * 状态专属内容——worker identity 层、该状态的 `systemPrompt` 和自身 `prompt`——作为唯一
+   * 未缓存的新尾部 user turn 发送。任务依赖先前 thread 决定或用户偏好，且通过状态 prompt
+   * 重述会繁琐或有损时，才使用它。
+   *
+   * fork transcript 是临时的：不会写入状态机 Session history（只写入状态的紧凑最终输出），
+   * 因此 fork 不会让 durable Session 膨胀。
+   */
   forkContext?: boolean;
 }
 
@@ -277,9 +277,9 @@ export interface StateMachineAgentState extends StateMachineBaseState {
 export interface StateMachineScriptState extends StateMachineBaseState {
   kind: "script";
   /**
- * 用于集成、初始化、清理和确定性检查的 shell command。runner 使用转换 input 将它渲染为
- * 模板；状态机 definition 应保持可序列化，不要在这里存储可执行函数。
- */
+   * 用于集成、初始化、清理和确定性检查的 shell command。runner 使用转换 input 将它渲染为
+   * 模板；状态机 definition 应保持可序列化，不要在这里存储可执行函数。
+   */
   command: string;
   /** command 的工作目录；默认使用状态机 Session cwd。 */
   cwd?: string;
@@ -293,17 +293,17 @@ export interface StateMachineScriptState extends StateMachineBaseState {
 export interface StateMachinePollState extends StateMachineBaseState {
   kind: "poll";
   /**
- * 下一次外部检查尝试之间的重复等待时间。接受 `ms` package 解析的人类可读时长字符串
- *（例如 `"30s"`、`"15m"`、`"3h"`、`"5d"`），也接受原始毫秒数。
- */
+   * 下一次外部检查尝试之间的重复等待时间。接受 `ms` package 解析的人类可读时长字符串
+   *（例如 `"30s"`、`"15m"`、`"3h"`、`"5d"`），也接受原始毫秒数。
+   */
   intervalMs: number | string;
   /** 状态机在此 poll 状态中最多保持多久，超时后 Session 失败。 */
   timeoutMs?: number;
   /**
- * 每次 poll 尝试运行一次。script 以 `successCodes` 中的退出码表示“发现结果”；其他退出码
- * 视为“继续 polling”，runner 会在 `intervalMs` 后 sleep 再尝试。stdout 会被捕获并作为
- * 状态输出暴露（可行时也解析为 JSON），但解析结果不会影响 poll 是否完成——只有退出码决定。
- */
+   * 每次 poll 尝试运行一次。script 以 `successCodes` 中的退出码表示“发现结果”；其他退出码
+   * 视为“继续 polling”，runner 会在 `intervalMs` 后 sleep 再尝试。stdout 会被捕获并作为
+   * 状态输出暴露（可行时也解析为 JSON），但解析结果不会影响 poll 是否完成——只有退出码决定。
+   */
   command: string;
   /** command 的工作目录；默认使用状态机 Session cwd。 */
   cwd?: string;
@@ -315,16 +315,16 @@ export interface StateMachinePollState extends StateMachineBaseState {
 export interface StateMachineTimerState extends StateMachineBaseState {
   kind: "timer";
   /**
- * 此 timer 状态完成的绝对时间。接受 ISO 8601 日期字符串（例如 `"2026-05-24T18:00:00Z"`）
- * 或 Unix epoch 毫秒数。与 `wakeAfterMs` 互斥，二者必须且只能设置一个。
- */
+   * 此 timer 状态完成的绝对时间。接受 ISO 8601 日期字符串（例如 `"2026-05-24T18:00:00Z"`）
+   * 或 Unix epoch 毫秒数。与 `wakeAfterMs` 互斥，二者必须且只能设置一个。
+   */
   wakeAt?: number | string;
   /**
- * 从 parent 选择此 timer 状态的时刻开始计算的相对时长，经过后 timer 完成。接受由 `ms`
- * package 解析的人类可读时长字符串（例如 `"3h"`、`"5d"`）或原始毫秒数。当等待长度
- * 预先已知但绝对 wake 时间未知时很有用（例如可复用 definition，或由 parent 在选择时决定
- * 开始时间的转换）。与 `wakeAt` 互斥。
- */
+   * 从 parent 选择此 timer 状态的时刻开始计算的相对时长，经过后 timer 完成。接受由 `ms`
+   * package 解析的人类可读时长字符串（例如 `"3h"`、`"5d"`）或原始毫秒数。当等待长度
+   * 预先已知但绝对 wake 时间未知时很有用（例如可复用 definition，或由 parent 在选择时决定
+   * 开始时间的转换）。与 `wakeAt` 互斥。
+   */
   wakeAfterMs?: number | string;
 }
 
@@ -396,7 +396,7 @@ export type StateMachineSessionEvent =
     }
   | {
       type: "state_started";
-    /** 只有即时工作构造完成且 task 被接纳后存在。 */
+      /** 只有即时工作构造完成且 task 被接纳后存在。 */
       execution?: StateMachineExecutionReceipt;
       timestamp: number;
       state: string;

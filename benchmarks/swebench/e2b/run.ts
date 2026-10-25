@@ -53,7 +53,7 @@ interface DriverOptions {
   instanceIds: string[];
   capacityOnly: boolean;
   retryFailed: boolean;
-  /** Controller-only admission ceiling; it may raise, but never lower, the frozen campaign budget. */
+  /** 仅供 controller 使用的准入上限；可以提高，但不能降低冻结的测试活动预算。 */
   budgetTotalUsd?: number;
   workerRepositorySha?: string;
 }
@@ -68,7 +68,7 @@ interface WorkerRecord {
   sandboxId: string;
   startedAt: string;
   finishedAt: string;
-  /** True once the non-idempotent campaign command may have reached the sandbox. */
+  /** 一旦不可幂等的测试活动命令可能已到达沙箱，就设为 true。 */
   modelCommandStarted: boolean;
   commandSucceeded: boolean;
   metrics: SandboxMetrics[];
@@ -77,10 +77,10 @@ interface WorkerRecord {
 
 interface BudgetReservationRecord {
   schemaVersion: 1;
-  /** Worker shard whose possible model spend remains conservatively held. */
+  /** 仍需保守预留可能模型支出的 worker shard。 */
   instanceId: string;
   trial: number;
-  /** Worst-case spend held until the worker's artifacts are integrated. */
+  /** 在 worker artifact 合并前一直保留的最坏情况支出。 */
   reservedUsd: number;
   createdAt: string;
 }
@@ -233,7 +233,7 @@ async function main(): Promise<void> {
   );
 }
 
-/** Resolve the committed campaign population, optionally narrowed to an explicit shard. */
+/** 解析已提交的测试活动实例集合，可选地缩小到显式 shard。 */
 export function selectE2BInstanceIds(
   spec: CampaignSpec,
   manifest: InstanceManifest,
@@ -261,7 +261,7 @@ export function selectE2BInstanceIds(
   return requested;
 }
 
-/** Expand committed instances into independently runnable trial shards. */
+/** 将已提交实例展开为可独立运行的 trial shard。 */
 export function selectE2BShards(
   spec: CampaignSpec,
   manifest: InstanceManifest,
@@ -272,7 +272,7 @@ export function selectE2BShards(
   );
 }
 
-/** Retry idempotent E2B controller requests that cannot create billable model work. */
+/** 重试不会产生计费模型工作的幂等 E2B controller 请求。 */
 export async function retryE2BNonModelRequest<T>(
   request: () => Promise<T>,
   retryDelaysMs: readonly number[] = E2B_READ_RETRY_DELAYS_MS,
@@ -599,7 +599,7 @@ async function runInstanceTrial(input: {
   if (failure) throw new E2BWorkerFailure(failure, modelCommandStarted);
 }
 
-/** Retry controller-level sandbox creation before any model command can run. */
+/** 在任何模型命令运行前重试 controller 层的沙箱创建。 */
 export async function retryE2BSandboxCreate<T>(
   create: () => Promise<T>,
   cleanup: () => Promise<void>,
@@ -686,7 +686,7 @@ async function downloadInstanceArtifacts(
   }
 }
 
-/** Install one worker's staged output while preserving immutable campaign provenance. */
+/** 安装一个 worker 的 staged 输出，同时保留不可变的测试活动 provenance。 */
 export async function integrateInstanceArtifacts(
   extractedRoot: string,
   destinationRoot: string,
@@ -754,7 +754,7 @@ interface CampaignProvenanceIdentity {
 async function copyArtifactTree(source: string, destination: string): Promise<void> {
   await mkdir(destination, { recursive: true });
   const entries = await readdir(source, { withFileTypes: true });
-  // A rollout status is its completion marker, so publish it only after its evidence files.
+  // rollout status 是完成标记，因此只有在证据文件写入后才发布它。
   entries.sort((left, right) => {
     if (left.name === "status.json") return 1;
     if (right.name === "status.json") return -1;
@@ -872,30 +872,30 @@ async function existingInstanceEntries(
 }
 
 export interface BudgetedPoolOptions<T> {
-  /** Maximum number of values that may perform model work simultaneously. */
+  /** 可同时执行模型工作的最大值数量。 */
   concurrency: number;
-  /** Model spend already charged before this pool starts. */
+  /** 此池启动前已计入的模型支出。 */
   accountedUsd: number;
-  /** Admission envelope checked against accounted spend plus active reservations. */
+  /** 根据已计入支出与活动预留检查的准入额度。 */
   totalUsd: number;
-  /** Admission reserve held while one value is running. */
+  /** 一个值运行期间持有的准入预留。 */
   reserveUsd: (value: T) => number;
-  /** Run one value and return the exact spend that replaces its reservation. */
+  /** 运行一个值，并返回替代其预留的精确支出。 */
   run: (value: T) => Promise<{ spentUsd: number; failure?: string }>;
 }
 
 export interface BudgetedPoolResult<T> {
-  /** Exact or conservatively held spend after every started value settles. */
+  /** 所有已启动值 settle 后的精确或保守持有支出。 */
   accountedUsd: number;
-  /** Started values that failed; no new values are admitted after the first failure. */
+  /** 已启动但失败的值；首次失败后不再准入新值。 */
   failures: string[];
-  /** Highest accounted-plus-reserved bound reached by the pool. */
+  /** 池达到的最高“已计入 + 已预留”上限。 */
   maximumBoundUsd: number;
-  /** Values withheld because work failed or the remaining admission budget could not reserve them. */
+  /** 因工作失败或剩余准入预算无法为其预留而被暂缓的值。 */
   unstarted: T[];
 }
 
-/** Run model work concurrently while reconciling each reservation before admitting more. */
+/** 并发运行模型工作，并在准入更多工作前协调每项预留。 */
 export async function runBudgetedPool<T>(
   values: readonly T[],
   options: BudgetedPoolOptions<T>,
@@ -956,9 +956,8 @@ export async function runBudgetedPool<T>(
     if (!Number.isFinite(settled.result.spentUsd) || settled.result.spentUsd < 0) {
       throw new Error("Settled model spend must be finite and non-negative.");
     }
-    // A task cap can interrupt only between provider events, so the final
-    // request may overshoot its reservation. Charge reality before admitting
-    // another shard instead of turning valid completed work into infra failure.
+    // task cap 只能在 provider 事件之间中断，因此最后一个请求可能超出其预留。
+    // 在准入下一个 shard 前按实际支出结算，避免把有效完成的工作误判为基础设施失败。
     accountedUsd += settled.result.spentUsd;
     maximumBoundUsd = Math.max(maximumBoundUsd, accountedUsd + reservedUsd);
     if (settled.result.failure) {
@@ -975,7 +974,7 @@ export async function runBudgetedPool<T>(
   };
 }
 
-/** Worst-case campaign model spend across completed, crashed, and pending attempts. */
+/** 计算已完成、崩溃和待处理 attempt 的测试活动模型支出上限。 */
 export function calculateCampaignBudgetBound(
   spec: CampaignSpec,
   manifest: InstanceManifest,
@@ -1004,7 +1003,7 @@ export function calculateCampaignBudgetBound(
   };
 }
 
-/** Worst-case reservation for the unfinished arms assigned to one E2B worker. */
+/** 分配给一个 E2B worker、尚未完成 arm 的最坏情况预留。 */
 export function calculateShardBudgetReservation(
   spec: CampaignSpec,
   attempts: readonly RolloutAttempt[],
@@ -1164,10 +1163,10 @@ function parseOptions(args: readonly string[]): DriverOptions {
 }
 
 /**
- * Resolve a controller-side budget top-up without changing the frozen worker inputs.
+ * 解析 controller 侧预算追加，但不改变冻结的 worker 输入。
  *
- * A top-up only admits more already-declared shards concurrently. The remote campaign
- * still enforces its committed per-arm limits and writes the original provenance.
+ * 追加预算只会并发准入更多已声明的 shard。远程测试活动仍会执行其已提交的
+ * 每个 arm 的限制，并写入原始 provenance。
  */
 export function resolveControllerBudgetTotalUsd(
   frozenTotalUsd: number,

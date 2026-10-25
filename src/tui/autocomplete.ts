@@ -17,19 +17,15 @@ export const AUTOCOMPLETE_LIMITS = {
   questionOption: QUESTION_OPTION_LIMIT,
 } as const;
 
-/**
- * Group an autocomplete row belongs to. `commands` are TUI built-ins
- * intercepted at submit time (e.g. `/image`, `/paste`, `/clear-images`);
- * `skills` are user-installed skill packages from the runner. The picker
- * renders each group under its own header.
+/** 自动补全行所属的组。`commands` 是提交时拦截的 TUI 内置命令
+ * （例如 `/image`、`/paste`、`/clear-images`）；`skills` 是运行器中的用户安装技能包。
+ * 选择器将各组渲染在各自的标题下。
  */
 export type SlashAutocompleteGroup = "commands" | "skills";
 
-/**
- * One row in the slash picker. `name` is shown as `/<name>`, the optional
- * `path` is rendered next to it (typically the skill's base dir), and the
- * description is wrapped underneath. `group` controls which header the row
- * appears under and defaults to `"skills"`.
+/** 斜杠选择器中的一行。`name` 显示为 `/<name>`，可选的 `path` 显示在旁边
+ * （通常为技能的基础目录），描述在下方换行显示。`group` 控制该行所属的标题，
+ * 默认为 `"skills"`。
  */
 export interface SkillAutocompleteItem {
   name: string;
@@ -38,22 +34,18 @@ export interface SkillAutocompleteItem {
   group?: SlashAutocompleteGroup;
 }
 
-/**
- * One row in the @-file picker. `relativePath` is what gets inserted; the
- * basename is shown larger and the directory portion is shown next to it
- * so deeply nested files stay scannable.
+/** @ 文件选择器中的一行。`relativePath` 是实际插入的内容；basename 突出显示，
+ * 目录部分显示在其旁边，让深层嵌套的文件仍便于浏览。
  */
 export interface FileAutocompleteItem {
-  /** File basename, used as the prominent label. */
+  /** 文件 basename，用作醒目的标签。 */
   name: string;
-  /** Repo-relative POSIX path inserted into the input on selection. */
+  /** 选择时插入输入框的仓库相对 POSIX 路径。 */
   relativePath: string;
 }
 
-/**
- * Cursor-anchored token covering the trigger character (`/` or `@`) plus
- * everything up to the next whitespace. The renderer highlights this slice
- * and replaces it on selection.
+/** 锚定于光标的 token，覆盖触发字符（`/` 或 `@`）及其后直到下一空白字符的所有内容。
+ * 渲染器高亮该片段，并在选择时替换它。
  */
 export interface AutocompleteToken {
   start: number;
@@ -66,10 +58,8 @@ export interface SkillAutocompleteReplacement {
   cursorOffset: number;
 }
 
-/**
- * Locate a `/skill` token bracketing the cursor. Returns undefined when the
- * cursor is not inside a slash-prefixed identifier so callers can hide the
- * picker without inspecting the panel state separately.
+/** 定位包围光标的 `/skill` token。光标不在斜杠前缀标识符内时返回 undefined，
+ * 调用方无需单独检查面板状态即可隐藏选择器。
  */
 export function activeSkillAutocompleteToken(
   text: string,
@@ -78,7 +68,7 @@ export function activeSkillAutocompleteToken(
   return activeTriggerToken(text, cursorOffset, "/", SKILL_AUTOCOMPLETE_TOKEN);
 }
 
-/** Same shape as the skill token, but anchored to `@<path>` for file mentions. */
+/** 结构与技能 token 相同，但锚定于文件提及的 `@<path>`。 */
 export function activeFileAutocompleteToken(
   text: string,
   cursorOffset: number,
@@ -93,8 +83,8 @@ function activeTriggerToken(
   pattern: RegExp,
 ): AutocompleteToken | undefined {
   const boundedOffset = Math.max(0, Math.min(cursorOffset, text.length));
-  // The trigger must be at the start of input or preceded by whitespace —
-  // otherwise URLs (https://…) and emails (a@b) would open the picker.
+  // 触发字符必须位于输入开头或前面有空白字符，
+  // 否则 URL（https://…）和邮箱（a@b）也会打开选择器。
   const escapedTrigger = trigger === "/" ? "\\/" : "@";
   const tokenStart = text
     .slice(0, boundedOffset)
@@ -110,11 +100,10 @@ function activeTriggerToken(
   return { start, end, query: text.slice(start + 1, boundedOffset) };
 }
 
-/**
- * Filter and order skills against a typed query.
+/** 根据键入的查询筛选技能并排序。
  *
- * Prefix match keeps the picker predictable: typing `/re` should always
- * surface `release` ahead of skills that merely contain the substring.
+ * 前缀匹配让选择器行为可预测：键入 `/re` 时，`release` 应始终排在
+ * 仅包含该子串的技能之前。
  */
 export function skillAutocompleteMatches(
   skills: readonly SkillAutocompleteItem[],
@@ -128,9 +117,8 @@ export function skillAutocompleteMatches(
     .slice(0, limit);
 }
 
-/**
- * Sort: commands group first (so built-ins are always visible at the top of
- * the picker), then skills. Within a group, alphabetical by name.
+/** 排序：commands 组在前（让内置命令始终显示在选择器顶部），skills 在后。
+ * 组内按名称的字母顺序排列。
  */
 function compareSlashItems(a: SkillAutocompleteItem, b: SkillAutocompleteItem): number {
   const groupDelta = groupOrder(a.group) - groupOrder(b.group);
@@ -142,12 +130,10 @@ function groupOrder(group: SlashAutocompleteGroup | undefined): number {
   return group === "commands" ? 0 : 1;
 }
 
-/**
- * Filter files for the `@` picker.
+/** 为 `@` 选择器筛选文件。
  *
- * Files are ranked so that basename prefix matches come first (most useful
- * when the user types a filename), followed by basename substring matches,
- * then full-path substring matches as a fallback for nested files.
+ * 文件排序优先考虑 basename 前缀匹配（用户输入文件名时最有用），
+ * 其次为 basename 子串匹配，最后以完整路径子串匹配兜底嵌套文件。
  */
 export function fileAutocompleteMatches(
   files: readonly FileAutocompleteItem[],
@@ -211,7 +197,7 @@ function wrapText(text: string, width: number): string[] {
   return lines;
 }
 
-/** Cycle the highlighted skill row, wrapping at both ends. */
+/** 循环移动高亮的技能行，在两端回绕。 */
 export function moveSkillAutocompleteSelection(
   selectedIndex: number,
   itemCount: number,
@@ -221,18 +207,14 @@ export function moveSkillAutocompleteSelection(
   return (selectedIndex + direction + itemCount) % itemCount;
 }
 
-/**
- * Build the answer-array for a single question given the picker state.
+/** 根据选择器状态，为单个问题构建答案数组。
  *
- * For single-select questions (`multiSelect` falsy) this resolves the
- * highlighted option to a one-element array. For multi-select questions
- * it emits the labels of every checked index in original option order, so
- * the serialized XML preserves the question's option ordering rather than
- * the order in which the user toggled them.
+ * 对于单选问题（`multiSelect` 为假值），将高亮选项解析为单元素数组。
+ * 对于多选问题，按原始选项顺序输出所有选中索引的标签，让序列化 XML
+ * 保留问题的选项顺序，而不是用户切换选项的顺序。
  *
- * Returns `undefined` when the picker has no question to answer; callers
- * use that to short-circuit a submission attempt. An empty array is a
- * valid result for a multi-select where the user advanced without picking.
+ * 选择器没有待回答问题时返回 `undefined`，调用方据此提前终止提交。
+ * 多选题中用户未选任何项就继续时，空数组也是有效结果。
  */
 export function questionPickerAnswer(
   question: TurnQuestion | undefined,
@@ -252,17 +234,13 @@ export function questionPickerAnswer(
   return [selectedOption.label];
 }
 
-/**
- * Fold the active question's current selection into the accumulated answers
- * map. Single-select live-records on Up/Down so highlight equals selection;
- * multi-select live-records on every Space/Enter toggle. Arrow-nav also
- * calls it so the departing question's answer is saved before moving.
+/** 将当前问题的当前选择合并到累计答案映射中。单选题在 Up/Down 时实时记录，
+ * 使高亮等于选择；多选题在每次 Space/Enter 切换时实时记录。
+ * 箭头导航也会调用此函数，以便在移动前保存离开的问题的答案。
  *
- * Returns the input map unchanged when there is no active question, when a
- * single-select question has no highlight (`selectedIndex === NO_HIGHLIGHT`,
- * i.e. the user has not yet pressed Up/Down on this question), or when the
- * highlight points at a row outside the question's options array (e.g. the
- * synthetic Done row in a multi-select).
+ * 没有活动问题、单选题没有高亮（`selectedIndex === NO_HIGHLIGHT`，
+ * 即用户尚未在此问题上按 Up/Down），或高亮指向问题选项数组之外的行
+ * （例如多选题中合成的 Done 行）时，原样返回输入映射。
  */
 export function commitActiveAnswer(
   question: TurnQuestion | undefined,
@@ -276,20 +254,14 @@ export function commitActiveAnswer(
   return { ...accumulated, [question.question]: answer };
 }
 
-/**
- * Sentinel for "no row highlighted yet". Picker initial state and freshly
- * advanced questions both start at this value; the first Up/Down lands on a
- * concrete row and (for single-select) live-records the highlight.
+/** 表示“尚无高亮行”的哨兵值。选择器初始状态和刚进入的问题都从此值开始；
+ * 首次 Up/Down 会落到具体行上，并在单选题中实时记录该高亮。
  */
 export const NO_HIGHLIGHT = -1;
 
-/**
- * Reconstruct picker selection state from a previously saved answer for the
- * given question. Used when the user navigates back via the Left arrow so
- * their prior toggles / highlight reappear instead of a blank slate, and
- * when advancing to a question that has not been visited yet (defaults to
- * `NO_HIGHLIGHT` so the user must explicitly press Up/Down to commit a
- * single-select answer).
+/** 根据指定问题之前保存的答案重建选择器选择状态。用于用户通过 Left 箭头返回时，
+ * 恢复先前的切换项/高亮，而非显示空白状态；也用于前进到尚未访问的问题
+ * （默认为 `NO_HIGHLIGHT`，用户必须明确按 Up/Down 才能确定单选答案）。
  */
 export function restoreSavedAnswer(
   question: TurnQuestion | undefined,
@@ -316,10 +288,8 @@ export function restoreSavedAnswer(
   };
 }
 
-/**
- * Move the picker highlight by one step, wrapping at both ends and lifting
- * the `NO_HIGHLIGHT` sentinel onto the first or last row depending on
- * direction. `itemCount` includes the synthetic Done row for multi-select.
+/** 将选择器高亮移动一步，在两端回绕，并按方向将 `NO_HIGHLIGHT` 哨兵值
+ * 移到首行或末行。`itemCount` 包含多选题中合成的 Done 行。
  */
 export function moveQuestionHighlight(
   selectedIndex: number,
@@ -337,12 +307,9 @@ export function formatQuestionOptionDescription(description: string | undefined)
   return wrapText(description, QUESTION_OPTION_DESCRIPTION_WIDTH).join("\n");
 }
 
-/**
- * Replace the @-token under the cursor with a markdown link of the form
- * `[@<basename>](<repo-relative-path>)`. The visible label keeps the `@`
- * prefix so it still reads as a mention; the link target is the path the
- * model can hand to its `read` tool. Trailing space is inserted only when
- * the next character is not whitespace, so chained mentions stay clean.
+/** 将光标下的 @ token 替换为 `[@<basename>](<repo-relative-path>)` 形式的
+ * markdown 链接。可见标签保留 `@` 前缀，仍显示为提及；链接目标是模型可交给
+ * `read` 工具的路径。仅当下一字符不是空白时插入尾随空格，让连续提及保持整洁。
  */
 export function replaceFileAutocompleteToken(
   text: string,
@@ -351,8 +318,7 @@ export function replaceFileAutocompleteToken(
 ): SkillAutocompleteReplacement {
   const slash = relativePath.lastIndexOf("/");
   const basename = slash === -1 ? relativePath : relativePath.slice(slash + 1);
-  // Prefix the target with `./` so it is unambiguously a repo-relative
-  // path rather than a URL, package name, or absolute path.
+  // 为目标加上 `./` 前缀，明确表示仓库相对路径，而不是 URL、包名或绝对路径。
   return replaceTriggerToken(text, token, `[@${basename}](./${relativePath})`);
 }
 
@@ -368,9 +334,9 @@ function replaceTriggerToken(
   return { text: nextText, cursorOffset: token.start + insertion.length };
 }
 
-// ---- legacy aliases --------------------------------------------------------
-// Kept so existing callers (and tests) that imported the old skill-only
-// names keep working without a rename ripple.
+// ---- 旧版别名 --------------------------------------------------------
+// 保留这些别名，让导入旧版仅技能名称的现有调用方（和测试）继续工作，
+// 避免重命名波及多处。
 
-/** @deprecated Use {@link AutocompleteToken}. */
+/** @deprecated 使用 {@link AutocompleteToken}。 */
 export type SkillAutocompleteToken = AutocompleteToken;

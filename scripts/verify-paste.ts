@@ -1,12 +1,12 @@
 /**
- * End-to-end headless verification for the CLI image-paste pipeline.
+ * 对 CLI 图像粘贴管线进行端到端无头验证。
  *
- * Exercises the same code path `inputField.onPaste` runs inside the TUI:
- *   raw bytes -> sniffImageMimeType -> persistPastedImage -> TurnPromptImage
- * Then builds a TurnPromptCommand with images and confirms the test
- * turn-runner harness forwards them as a multimodal AgentMessage to the agent.
+ * 执行 `inputField.onPaste` 在 TUI 内使用的同一条代码路径：
+ *   原始字节 -> sniffImageMimeType -> persistPastedImage -> TurnPromptImage
+ * 随后构造带图像的 TurnPromptCommand，并确认测试用 turn-runner harness
+ * 将其作为多模态 AgentMessage 转发给 Agent。
  *
- * Run with: bun scripts/verify-paste.ts [optional/path/to/image.png]
+ * 运行方式：bun scripts/verify-paste.ts [optional/path/to/image.png]
  */
 
 import { readFileSync } from "node:fs";
@@ -79,8 +79,8 @@ async function main(): Promise<void> {
     prompt: "Please describe the attached image.",
   });
   await turn;
-  // The default test harness ignores images on the start prompt, so drive a
-  // second prompt that explicitly attaches one and inspect what landed.
+  // 默认测试 harness 会忽略 start prompt 上的图像，因此发送第二条明确附带图像的提示词，
+  // 再检查实际收到的内容。
   await runner.turn({
     type: "prompt",
     message: "And one more with an attachment.",
@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     images: [pending.attachment],
   });
 
-  // Find the worker invocation that received images.
+  // 找到实际收到图像的 worker 调用。
   const worker = runner.workerInputs.find((w) => w.images && w.images.length > 0);
   if (!worker) throw new Error("no worker input received images");
   const img = worker.images?.[0];

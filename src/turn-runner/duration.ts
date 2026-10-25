@@ -3,17 +3,14 @@ import ms from "ms";
 import type { StateMachinePollState, StateMachineTimerState } from "../types/state-machine.js";
 
 /**
- * Parse a duration value into milliseconds.
+ * 将 duration 值解析为毫秒。
  *
- * State-machine schedule fields (poll `interval`, timer `wakeAfter`) accept
- * either:
- * - a number (raw milliseconds; the legacy form so existing definitions and
- *   programmatic callers keep working), or
- * - a human-readable duration string parsed by the `ms` package — for example
- *   `"30s"`, `"15m"`, `"3h"`, `"5d"`, `"2 weeks"`.
+ * state machine 的调度字段（poll 的 `interval`、timer 的 `wakeAfter`）接受以下两种形式：
+ * - 数字（原始毫秒数；这是兼容旧版的形式，因此现有定义和程序化调用方仍可工作）；
+ * - 由 `ms` 包解析的人类可读 duration 字符串，例如
+ *   `"30s"`、`"15m"`、`"3h"`、`"5d"`、`"2 weeks"`。
  *
- * Returns the resolved millisecond value, or throws when the input is neither
- * a finite positive number nor a parseable duration string.
+ * 返回解析出的毫秒数；当输入既不是有限的正数，也不是可解析的 duration 字符串时抛出异常。
  */
 export function parseDurationToMs(value: unknown, label: string): number {
   if (typeof value === "number") {
@@ -41,15 +38,14 @@ export function parseDurationToMs(value: unknown, label: string): number {
 }
 
 /**
- * Parse an absolute wake target into a Unix-epoch millisecond timestamp.
+ * 将绝对唤醒目标解析为 Unix 纪元毫秒时间戳。
  *
- * Timer `wakeAt` accepts either:
- * - a number (Unix-epoch milliseconds; the legacy form), or
- * - an ISO 8601 / RFC 3339 / any `Date.parse`-compatible string — for example
- *   `"2026-05-24T18:00:00Z"` or `"2026-05-24 18:00"`.
+ * Timer 的 `wakeAt` 接受以下两种形式：
+ * - 数字（Unix 纪元毫秒数；这是兼容旧版的形式）；
+ * - ISO 8601 / RFC 3339 / 任何与 `Date.parse` 兼容的字符串，例如
+ *   `"2026-05-24T18:00:00Z"` 或 `"2026-05-24 18:00"`。
  *
- * Returns the resolved epoch-ms value, or throws when the input is neither a
- * finite number nor a parseable date string.
+ * 返回解析出的纪元毫秒数；当输入既不是有限数值，也不是可解析的日期字符串时抛出异常。
  */
 export function parseWakeAtToMs(value: unknown, label: string): number {
   if (typeof value === "number") {
@@ -77,11 +73,9 @@ export function parseWakeAtToMs(value: unknown, label: string): number {
 }
 
 /**
- * Best-effort wake-time fallback used by sleep-event replay paths that lack
- * turn-loop context. Returns `Date.now()` when the underlying value cannot be
- * parsed instead of throwing, because these callers are reconstructing UI
- * banners rather than enforcing schedule validity (the turn-loop path runs
- * its own strict parsing on every state entry).
+ * 用于缺少回合循环上下文的 sleep 事件重放路径的尽力而为唤醒时间回退值。
+ * 当底层值无法解析时返回 `Date.now()` 而不是抛出异常，因为这些调用方是在重建 UI
+ * 横幅，而不是在强制校验调度有效性（回合循环路径会在每次进入 state 时自行严格解析）。
  */
 export function scheduledStateFallbackWakeAt(
   state: StateMachinePollState | StateMachineTimerState | undefined,
@@ -98,8 +92,8 @@ export function scheduledStateFallbackWakeAt(
       return Date.now() + parseDurationToMs(state.wakeAfterMs, "wakeAfterMs");
     }
   } catch {
-    // Fall through to Date.now() — the strict path in the turn loop will
-    // surface the real error when the state is next entered.
+    // 回退到 Date.now()；回合循环中的严格路径会在下次进入 state 时
+    // 暴露真正的错误。
   }
   return Date.now();
 }

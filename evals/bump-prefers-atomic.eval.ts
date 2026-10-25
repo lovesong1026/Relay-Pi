@@ -14,19 +14,9 @@ import { createMemoryFixture, type MemoryFixture } from "../test/helpers/memory-
 import { testIfDocker } from "../test/helpers/docker-only.js";
 
 /**
- * Live-observer evals for the SELECTION half of the usage-bumping
- * path: when the observer cites a memory and the global pool
- * contains both a broad summary reflection and narrow, unit-sized
- * siblings covering the same fact, only the atomic rows the turn
- * actually leaned on should have their `last_used_at` advance.
+ * 面向实时 observer 的 usage-bumping 路径中选择部分的 live-observer eval：当 observer 引用一条 memory，而全局池同时包含覆盖同一事实的宽泛 summary reflection 和狭窄、unit-sized siblings 时，只有该 turn 实际依赖的 atomic rows 才应推进 `last_used_at`。
  *
- * Harness: full-observer (drives `updateObservationalMemory`
- * end-to-end against the live memory model). `applyUsageBumps` is
- * private, and the SELECTION logic includes both the observer
- * citing the correct ids and the bump applying only to those rows,
- * so the end-to-end path is the right level of test even though
- * it costs a live model call. The assertions land on stored
- * `last_used_at` values rather than on prompt output.
+ * Harness：full-observer（端到端驱动 `updateObservationalMemory`，使用实时 memory model）。`applyUsageBumps` 是私有的，而选择逻辑同时包含 observer 引用正确 id 以及只对这些 row 应用 bump，因此端到端路径是合适的测试层级，尽管它需要一次实时 model 调用。断言检查存储的 `last_used_at` 值，而不是提示词输出。
  */
 
 const memoryModel = process.env.EVAL_MEMORY_MODEL ?? DEFAULT_CLI_MEMORY_MODEL;
@@ -107,7 +97,7 @@ describe("bump prefers the narrowest row that carries the cited fact", () => {
 
         const after = await readLastUsed(fixture);
 
-        // Atomic siblings covering the two cited facts must bump.
+        // 覆盖两个被引用事实的 atomic siblings 必须 bump。
         const transientAtomic = atomicIds.find((id) => after.get(id)?.content.includes("v0.1.131"));
         const vitestAtomic = atomicIds.find((id) => after.get(id)?.content.includes("885746567"));
         expect(transientAtomic).toBeDefined();
@@ -115,9 +105,7 @@ describe("bump prefers the narrowest row that carries the cited fact", () => {
         expect(after.get(transientAtomic!)!.lastUsedAt).toBeGreaterThan(seededTime);
         expect(after.get(vitestAtomic!)!.lastUsedAt).toBeGreaterThan(seededTime);
 
-        // The summary row covers the same facts but is not the narrowest
-        // sibling; the observer must prefer the narrow rows. At the very
-        // least the summary's lastUsedAt must stay below any bumped row.
+        // summary row 覆盖相同事实，但不是最窄的 sibling；observer 必须优先选择窄 row。至少，summary 的 lastUsedAt 必须保持低于任何被 bump 的 row。
         const summaryLastUsed = after.get(summaryId)!.lastUsedAt;
         expect(summaryLastUsed).toBeLessThan(after.get(transientAtomic!)!.lastUsedAt);
         expect(summaryLastUsed).toBeLessThan(after.get(vitestAtomic!)!.lastUsedAt);
@@ -148,8 +136,7 @@ describe("bump prefers the narrowest row that carries the cited fact", () => {
         );
 
         const after = await readLastUsed(fixture);
-        // No atomic siblings exist; the only row covering those facts
-        // is the only row, so the bump lands on it.
+        // 没有 atomic siblings；覆盖这些事实的唯一 row 就是这唯一的 row，因此 bump 会落在它上面。
         expect(after.get(summaryId)!.lastUsedAt).toBeGreaterThan(seededTime);
       } finally {
         await fixture.dispose();
@@ -185,8 +172,7 @@ describe("bump prefers the narrowest row that carries the cited fact", () => {
           const row = after.get(id);
           return row !== undefined && row.lastUsedAt > seededTime;
         });
-        // Three distinct facts were cited; each should land on its
-        // own atomic row, not collapse to a single bump.
+        // 引用了三个不同事实；每个事实都应落在自己的 atomic row 上，而不是合并成一次 bump。
         expect(bumped.length).toBeGreaterThanOrEqual(3);
       } finally {
         await fixture.dispose();

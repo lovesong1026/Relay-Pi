@@ -1,43 +1,34 @@
 import type { PGlite, Transaction } from "@electric-sql/pglite";
 
 /**
- * Forward-only schema migrations for the observational memory database.
+ * observational memory database 的只前进 schema migration。
  *
- * Why a real migration framework instead of bare `CREATE TABLE IF NOT
- * EXISTS`: the memory schema is changing shape (adding `session_id` and
- * `kind`, dropping `scope`, reshaping `source_json`) and a user upgrading
- * Relay Pi must have their existing rows transformed in place — dropping the
- * column without rewriting the data would lose information, and there is
- * no `relay-pi memory migrate` CLI step we want to require.
+ * 为什么使用真实 migration framework，而不是裸的 `CREATE TABLE IF NOT EXISTS`：memory schema
+ * 正在改变形状（添加 `session_id` 和 `kind`、删除 `scope`、重塑 `source_json`），用户升级
+ * Relay Pi 时必须原地转换已有 row——不重写数据就删除 column 会丢失信息，而且我们不希望
+ * 要求额外的 `relay-pi memory migrate` CLI 步骤。
  *
- * Design notes:
- *   - Migrations run inside `loadStoredMemory()` and `MemoryDb.open()` so
- *     both the runner and the `relay-pi memory` CLI see the same upgraded
- *     schema. Failure aborts startup with a clear message; the underlying
- *     PGlite directory is also covered by `quarantineDataDirectory()` for
- *     unreadable cases (see `pglite.ts`).
- *   - Each migration runs inside a single transaction. Postgres DDL is
- *     transactional, so a partial failure rolls back to the prior version.
- *   - The `schema_version` table records every applied migration with its
- *     wall-clock timestamp. This is read once on open to find the current
- *     version; we never go backwards.
- *   - Forward-only by design. A bad migration is fixed by writing the next
- *     migration, not by reverting. This matches gbrain's pattern after
- *     they hit "upgrade-wedge" bugs across six schema versions.
- *   - Prefer drop-and-recreate over data-preserving rebuilds for the
- *     embedding tables. Embeddings are cheap to regenerate (the backfill
- *     worker repopulates lazily within minutes of CLI startup) and the
- *     data-preserving path requires reading every existing row, which has
- *     bitten us with PGlite TOAST corruption on `vector(3072)` columns
- *     after heavy UPSERT load (see migration 7's comment). Observation
- *     rows are the only data that genuinely needs in-place transforms.
+ * 设计说明：
+ *   - Migration 在 `loadStoredMemory()` 和 `MemoryDb.open()` 中运行，因此 runner 和
+ *     `relay-pi memory` CLI 看到同一份升级后的 schema。失败会以清晰消息中止启动；不可读时，
+ *     底层 PGlite 目录也由 `quarantineDataDirectory()` 负责处理（见 `pglite.ts`）。
+ *   - 每个 migration 在单个 transaction 中运行。Postgres DDL 支持 transaction，因此部分失败
+ *     会回滚到之前的版本。
+ *   - `schema_version` table 记录每个已应用 migration 及其 wall-clock 时间戳。打开时只读取一次
+ *     以找到当前版本；我们绝不回退。
+ *   - 设计为只前进。错误 migration 通过编写下一个 migration 修复，而不是回滚。这与 gbrain
+ *     在六个 schema version 间遇到“upgrade-wedge”bug 后采用的模式一致。
+ *   - embedding table 优先使用删除并重建，而不是保留数据的 rebuild。Embedding 很容易重新
+ *     生成（backfill worker 会在 CLI 启动后数分钟内惰性填充），而保留数据的路径需要读取每个
+ *     现有 row；重负载 UPSERT `vector(3072)` column 时，这曾触发 PGlite TOAST corruption
+ *    （见 migration 7 的 comment）。Observation row 是唯一真正需要原地转换的数据。
  */
 export interface Migration {
-  /** Monotonic version number. Migrations are applied strictly in ascending order. */
+  /** 单调递增的版本号。Migration 严格按升序应用。 */
   version: number;
-  /** One-line summary stored in `schema_version.description` for audit. */
+  /** 为审计存储在 `schema_version.description` 中的单行摘要。 */
   description: string;
-  /** Forward step. Receives a transaction so DDL + DML run atomically. */
+  /** 前进步骤。接收 transaction，使 DDL + DML 原子执行。 */
   up: (tx: Transaction) => Promise<void>;
 }
 
@@ -46,9 +37,8 @@ const MIGRATIONS: Migration[] = [
     version: 1,
     description: "initial observations schema",
     up: async (tx) => {
-      // Snapshot of the schema that shipped before migrations existed.
-      // Idempotent so brand-new installs and pre-migration brains both
-      // converge on the same baseline before later migrations run.
+      // Migration 出现前发布的 schema 快照。
+      // 保持幂等，使全新安装和 migration 前的数据库都能在后续 migration 运行前收敛到同一基线。
       await tx.exec(`
         CREATE TABLE IF NOT EXISTS observations (
           id TEXT PRIMARY KEY,
@@ -70,30 +60,30 @@ const MIGRATIONS: Migration[] = [
     version: 2,
     description: "add session_id, kind; drop scope; flatten tool source into tag",
     up: async (tx) => {
-      // Schema reshape for the cross-session memory layer.
+      // 为跨 Session memory 层重塑 schema。
       //
-      //   - session_id NULL-allowed: identifies which session created the
-      //     row. NULL means "created before sessionId tracking existed";
-      //     loaders treat NULL the same as any non-current session
-      //     (always global-eligible, never local-eligible). New rows
-      //     always set it once the runner is plumbed in commit 3.
+      //   - session_id 允许 NULL：标识创建 row 的 Session。NULL 表示“在 sessionId tracking 存在前创建”；
+      //     loader 将 NULL 与任何非当前 Session 等同（始终可进入 global，永不可进入 local）。
+      //     runner 接入后，新 row 始终会设置它。
+      //     runner 接入后，新 row 始终会设置它。
+      //     runner 接入后，新 row 始终会设置它。
       //
-      //   - kind: "observation" vs "reflection". Reflections rank higher
-      //     by default (reflectionBias multiplier in the loader) because
-      //     they are condensed cross-observation summaries. Backfilled
-      //     from tags_json since the existing reflector tags its output
+      //   - kind："observation" 与 "reflection" 的区分。Reflection 默认排名更高
+      //     （loader 中的 reflectionBias multiplier），因为它们是跨 observation 的压缩摘要。
+      //     根据 tags_json 回填，因为现有 reflector 会给其输出加上
+      //     `[`"observational-memory","reflection"`]`。
       //     with `["observational-memory","reflection"]`.
       //
-      //   - scope dropped: the session/resource axis is replaced by
-      //     `session_id matches current session?`, which is what callers
-      //     actually wanted. "resource" scope was never wired through to
-      //     a real query path.
+      //   - 删除 scope：Session/resource 轴由 `session_id matches current session?` 替代，
+      //     这正是调用方实际需要的。"resource" scope 从未接入真实 query path。
+      //     这正是调用方实际需要的。"resource" scope 从未接入真实 query path。
+      //     这正是调用方实际需要的。"resource" scope 从未接入真实 query path。
       //
-      //   - source_json reshape: drop the `{kind:"tool",toolName:X}`
-      //     variant and lift toolName into tags as `tool:X`. Tool
-      //     provenance becomes searchable by tag, and the source enum
-      //     tightens to user|agent|system. Idempotent: rows already
-      //     reshaped (or never tool-sourced) pass through unchanged.
+      //   - 重塑 source_json：删除 `{kind:"tool",toolName:X}` variant，并将 toolName 提升为
+      //     `tool:X` tag。Tool provenance 变为可搜索的 tag，source enum 收紧为 user|agent|system。
+      //     `tool:X` tag。Tool provenance 变为可搜索的 tag，source enum 收紧为 user|agent|system。
+      //     幂等：已重塑的 row（或从未由 tool 写入的 row）原样通过。
+      //     幂等：已重塑的 row（或从未由 tool 写入的 row）原样通过。
       await tx.exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS session_id TEXT`);
       await tx.exec(
         `ALTER TABLE observations ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'observation'`,
@@ -120,8 +110,7 @@ const MIGRATIONS: Migration[] = [
         try {
           parsedSource = JSON.parse(row.source_json) as typeof parsedSource;
         } catch {
-          // Malformed JSON predates this code; leave the row alone rather
-          // than guessing.
+          // 格式错误的 JSON 来自此代码之前；保留 row 原样，而不是猜测。
           continue;
         }
         if (parsedSource.kind !== "tool") continue;
@@ -145,10 +134,9 @@ const MIGRATIONS: Migration[] = [
 
       await tx.exec(`ALTER TABLE observations DROP COLUMN IF EXISTS scope`);
 
-      // Indexes for the new query patterns: session-scoped local lookup
-      // and (priority, recency)-ranked global lookup. Composite index
-      // matches the loader's ORDER BY shape so the planner can avoid a
-      // sort on hot paths.
+      // 新 query pattern 的 index：按 Session 限定的 local lookup，以及按（priority、recency）
+      // 排名的 global lookup。复合 index 与 loader 的 ORDER BY 形状匹配，使 planner 能在
+      // hot path 上避免排序。
       await tx.exec(`CREATE INDEX IF NOT EXISTS idx_obs_session_id ON observations(session_id)`);
       await tx.exec(
         `CREATE INDEX IF NOT EXISTS idx_obs_kind_priority_created
@@ -160,31 +148,22 @@ const MIGRATIONS: Migration[] = [
     version: 3,
     description: "pgvector embeddings table and tsvector keyword index",
     up: async (tx) => {
-      // Hybrid retrieval (recall_memory tool) needs two indexes side by
-      // side: a vector index for semantic similarity and a tsvector GIN
-      // index for keyword matches. Reciprocal Rank Fusion in the tool
-      // merges both ranked lists; one without the other misses the
-      // class of queries the other catches (proper-noun lookups for
-      // keyword, fuzzy paraphrases for vector).
+      // Hybrid retrieval（recall_memory tool）需要两个并列的 index：用于 semantic similarity 的
+      // vector index，以及用于 keyword match 的 tsvector GIN index。Tool 中的 Reciprocal Rank
+      // Fusion 合并两个排序 list；缺少任一个都会漏掉另一个能捕捉的 query 类别（keyword 的
+      // proper-noun lookup，vector 的模糊 paraphrase）。
       //
-      // pgvector itself is loaded as a PGlite extension at construction
-      // time (see memory/pglite.ts); CREATE EXTENSION is the SQL-level
-      // hook that activates the type and operator definitions.
+      // pgvector 在构造时作为 PGlite extension 加载（见 memory/pglite.ts）；CREATE EXTENSION 是
+      // 激活该类型和 operator definition 的 SQL-level hook。
       await tx.exec(`CREATE EXTENSION IF NOT EXISTS vector`);
 
-      // Embeddings live in a sibling table rather than a column on
-      // observations because (a) embeddings are written asynchronously
-      // by the backfill worker, often well after the observation row
-      // lands, and (b) the embedding model may change in the future
-      // without forcing every existing row to re-embed in lockstep.
-      // The `model` column records which model produced each vector
-      // so a future re-embedding pass can selectively replace stale
-      // entries.
+      // Embedding 放在 observations 的 sibling table，而非 column 中，因为（a）backfill worker
+      // 异步写入 embedding，通常远在 observation row 落库之后；（b）未来可能更换 embedding
+      // model，而不必让所有现有 row 同步重新 embedding。`model` column 记录生成每个 vector
+      // 的 model，以便未来 re-embedding pass 有选择地替换旧 entry。
       //
-      // Dimension 1536 matches OpenAI text-embedding-3-small (the
-      // model exposed by the pre-rename embedding endpoint). Switching to a
-      // different dimension means a new migration that drops and
-      // rebuilds this table; the dimension is part of the column type.
+      // 1536 维对应 OpenAI text-embedding-3-small（重命名 embedding endpoint 之前暴露的 model）。
+      // 切换到不同维度需要新的 migration，删除并重建此 table；维度属于 column type。
       await tx.exec(`
         CREATE TABLE IF NOT EXISTS observation_embeddings (
           observation_id TEXT PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
@@ -194,20 +173,17 @@ const MIGRATIONS: Migration[] = [
         )
       `);
 
-      // HNSW is the right default for memory-scale corpora (typical
-      // user has thousands, not millions, of observations): build is
-      // fast, query is sub-millisecond, recall is high. Cosine
-      // operator class matches the recall_memory tool's similarity
-      // metric.
+      // HNSW 是 memory-scale corpus 的正确默认值（典型用户有数千条，而非数百万条 observation）：
+      // 构建快，query 小于毫秒，recall 高。Cosine operator class 与 recall_memory tool 的
+      // similarity metric 匹配。
       await tx.exec(
         `CREATE INDEX IF NOT EXISTS idx_obs_emb_hnsw
          ON observation_embeddings USING hnsw (vector vector_cosine_ops)`,
       );
 
-      // GIN index on a generated tsvector lets the keyword path of
-      // hybrid retrieval run in milliseconds without per-query
-      // tokenization overhead. English config is a reasonable default;
-      // multi-language support can swap in `simple` later.
+      // generated tsvector 上的 GIN index 让 hybrid retrieval 的 keyword path 在毫秒内运行，
+      // 无需每次 query 进行 tokenization。English config 是合理默认值；之后可以切换到
+      // `simple` 以支持多语言。
       await tx.exec(
         `CREATE INDEX IF NOT EXISTS idx_obs_content_fts
          ON observations USING gin (to_tsvector('english', content))`,
@@ -218,26 +194,20 @@ const MIGRATIONS: Migration[] = [
     version: 4,
     description: "add last_used_at column for usage-decay ranking",
     up: async (tx) => {
-      // last_used_at drives the global-layer ranking instead of
-      // created_at. Bumped at end of turn for every observation the
-      // observer reports as having informed the assistant's response,
-      // so memories that keep being used keep surfacing.
+      // last_used_at 驱动 global-layer ranking，而不是 created_at。每回合结束时，observer 报告
+      // 哪些 observation 影响了 assistant response，系统就为它们 bump；因此持续被使用的 memory
+      // 会持续浮现。
       //
-      // Two-step add: column comes in nullable, backfills to
-      // created_at for every existing row (so legacy rows enter the
-      // ranking with their original recency), then we tighten to
-      // NOT NULL. PGlite doesn't accept column-level defaults that
-      // reference other columns, which is why this can't be a single
-      // ALTER TABLE.
+      // 分两步添加：column 先允许 NULL，再对每个现有 row 回填 created_at（使旧 row 以原始
+      // recency 进入 ranking），最后收紧为 NOT NULL。PGlite 不接受引用其他 column 的
+      // column-level default，因此不能用单个 ALTER TABLE 完成。
       await tx.exec(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS last_used_at BIGINT`);
       await tx.exec(`UPDATE observations SET last_used_at = created_at WHERE last_used_at IS NULL`);
       await tx.exec(`ALTER TABLE observations ALTER COLUMN last_used_at SET NOT NULL`);
 
-      // Replace the created_at-keyed ranking index with a
-      // last_used_at-keyed one. The loader's ORDER BY now sorts by
-      // last_used_at; keeping the old index would be dead weight
-      // since no query path consults created_at as the ranking key
-      // any more.
+      // 用 last_used_at-keyed index 替换 created_at-keyed ranking index。loader 的 ORDER BY 现在
+      // 按 last_used_at 排序；保留旧 index 没有意义，因为没有 query path 再将 created_at 用作
+      // ranking key。
       await tx.exec(`DROP INDEX IF EXISTS idx_obs_kind_priority_created`);
       await tx.exec(
         `CREATE INDEX IF NOT EXISTS idx_obs_kind_priority_lastused
@@ -249,26 +219,19 @@ const MIGRATIONS: Migration[] = [
     version: 5,
     description: "self-heal: collapse duplicate observation rows that bypassed the PK index",
     up: async (tx) => {
-      // Some installs accumulated multiple physical rows for the same
-      // `id` in `observations` despite `id TEXT PRIMARY KEY` being
-      // declared since v1, likely fallout from a prior PGlite corruption
-      // event (visible as `memory.db.corrupted-*` directories) that
-      // left the unique index out of sync with the heap. Symptom: every
-      // `INSERT ... ON CONFLICT (id) DO UPDATE` raised
-      // `duplicate key value violates unique constraint "observations_pkey"`,
-      // which the runner surfaced as `[system]` errors in the TUI.
+      // 某些安装的 `observations` 中为同一 `id` 累积了多个物理 row，尽管 v1 起就声明了
+      // `id TEXT PRIMARY KEY`；可能是之前的 PGlite corruption event（以 `memory.db.corrupted-*`
+      // 目录出现），导致 unique index 与 heap 不同步。症状是每次 `INSERT ... ON CONFLICT (id)
+      // DO UPDATE` 都抛出 `duplicate key value violates unique constraint "observations_pkey"`，
+      // runner 再将它作为 TUI 中的 `[system]` error 展示。
       //
-      // We can't trust the stale index, so the dedupe stays in the heap:
-      // a window function ranks rows per id (freshest `last_used_at`,
-      // then `created_at`), and an outer DELETE keyed on `ctid` removes
-      // every row that isn't the winner. Disabling index plans for this
-      // transaction forces a seq scan on the heap and a TID scan on the
-      // delete so the planner can't latch onto the broken index. After
-      // the dedupe the heap is consistent and REINDEX can rebuild the
-      // unique index from clean data.
+      // 我们不能信任旧 index，因此 dedupe 留在 heap 中：window function 按 id 为 row 排名
+      //（最新的 `last_used_at`，然后是 `created_at`），外层 DELETE 以 `ctid` 为 key 移除
+      // 所有没有胜出的 row。禁用此 transaction 的 index plan，强制 heap 使用 seq scan、
+      // delete 使用 TID scan，避免 planner 绑定到损坏的 index。dedupe 后 heap 一致，REINDEX
+      // 可以从干净数据重建 unique index。
       //
-      // Forward-only and idempotent: a healthy DB has no dup rows and
-      // the DELETE removes nothing.
+      // 只前进且幂等：健康 DB 没有重复 row，DELETE 不会移除任何内容。
       await tx.exec(`SET LOCAL enable_indexscan = off`);
       await tx.exec(`SET LOCAL enable_indexonlyscan = off`);
       await tx.exec(`SET LOCAL enable_bitmapscan = off`);
@@ -287,14 +250,10 @@ const MIGRATIONS: Migration[] = [
         )
       `);
 
-      // After the heap is deduped, rebuild the unique index so it
-      // matches. REINDEX covers the production case where the index
-      // existed but was stale; ADD PRIMARY KEY covers a recovery state
-      // where the unique index was dropped entirely (e.g. by an
-      // operator running `DROP CONSTRAINT ... CASCADE` to clear out
-      // dependent objects during manual cleanup). Either path fails
-      // loudly if duplicates still exist, surfacing a half-healed state
-      // instead of masking it.
+      // heap 去重后重建 unique index，使其匹配。REINDEX 覆盖 index 存在但过期的生产场景；
+      // ADD PRIMARY KEY 覆盖 unique index 被完全删除的恢复状态（例如 operator 运行
+      // `DROP CONSTRAINT ... CASCADE`，在手工清理期间移除依赖对象）。如果重复仍存在，任一路径
+      // 都会大声失败，暴露半修复状态而不是将其掩盖。
       const indexExists = await tx.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM pg_indexes
          WHERE tablename = 'observations' AND indexname = 'observations_pkey'`,
@@ -310,20 +269,15 @@ const MIGRATIONS: Migration[] = [
     version: 6,
     description: "rebuild embeddings table at 3072 dims for google/gemini-embedding-2",
     up: async (tx) => {
-      // The legacy embed endpoint served `google/gemini-embedding-2`
-      // at 3072 dimensions, replacing the previous text-embedding-3-small
-      // path. Every existing 1536-dim vector lives in a different latent
-      // space, so keeping them around would mean cosine similarity
-      // against new query embeddings is noise. Drop the table and let
-      // the backfill worker repopulate it lazily after upgrade.
+      // 旧版 embed endpoint 以 3072 维提供 `google/gemini-embedding-2`，替代之前的
+      // text-embedding-3-small 路径。每个现有 1536 维 vector 都处于不同的 latent space，因此
+      // 保留它们会让它们与新 query embedding 的 cosine similarity 变成噪声。删除 table，
+      // 让 backfill worker 在升级后惰性重新填充。
       //
-      // No HNSW index on the new table: pgvector's default
-      // `vector_cosine_ops` opclass caps HNSW at 2,000 dimensions, and
-      // adding `halfvec(3072)` + a half-precision opclass complicates
-      // the schema for a corpus that brute-force-scans in well under
-      // 10 ms at the thousands-of-rows scale this database operates at.
-      // The existing tsvector GIN index on `observations.content`
-      // survives untouched and continues to serve the keyword path.
+      // 新 table 不建 HNSW index：pgvector 的默认 `vector_cosine_ops` opclass 将 HNSW 限制在
+      // 2,000 维，而添加 `halfvec(3072)` 和半精度 opclass 会让 schema 复杂化；在此数据库
+      // 运行的数千 row 规模上，brute-force scan 远低于 10ms。observations.content 上已有的
+      // tsvector GIN index 原样保留，继续服务 keyword path。
       await tx.exec(`DROP TABLE IF EXISTS observation_embeddings`);
       await tx.exec(`
         CREATE TABLE observation_embeddings (
@@ -339,28 +293,19 @@ const MIGRATIONS: Migration[] = [
     version: 7,
     description: "drop FK cascade on observation_embeddings so embeddings survive parent churn",
     up: async (tx) => {
-      // The original `REFERENCES observations(id) ON DELETE CASCADE`
-      // caused a hot-loop bug: the reflector's session-scoped
-      // delete-and-reinsert cycle would wipe every embedding for a
-      // session via cascade, and the backfill worker would then
-      // re-embed the same ids over and over (or, after the cooldown
-      // was added, leave them silently un-embedded for five minutes).
+      // 原始的 `REFERENCES observations(id) ON DELETE CASCADE` 会导致 hot-loop bug：reflector 的
+      // Session-scoped delete-and-reinsert cycle 会通过 cascade 清除该 Session 的所有 embedding，
+      // backfill worker 随后反复为相同 id 重新 embedding（或在加入 cooldown 后，让它们无声地
+      // 处于五分钟未 embedding 状态）。
       //
-      // Drop the table and recreate it without the FK so an embedding
-      // row outlives a parent delete. Orphans are harmless: the
-      // recall path JOINs back to `observations` and naturally
-      // filters them out, and a future reinsert of the same id keeps
-      // its existing embedding until the worker refreshes it through
-      // the ON CONFLICT path.
+      // 删除 table 并在没有 FK 的情况下重建，使 embedding row 的生命周期超过 parent delete。
+      // Orphan 无害：recall path 会 JOIN 回 `observations` 并自然过滤；未来同 id reinsert 时，
+      // worker 通过 ON CONFLICT path 刷新前，会继续保留现有 embedding。
       //
-      // We do not preserve the existing rows. An earlier draft of
-      // this migration tried `CREATE ... + INSERT SELECT * + DROP +
-      // RENAME`, but PGlite's TOAST storage of `vector(3072)` columns
-      // hit `missing chunk number 0 for toast value ...` on production
-      // databases that had been heavily UPSERTed by the worker. The
-      // backfill worker repopulates this table lazily within minutes
-      // of CLI startup, so dropping and rebuilding matches migration
-      // 6's precedent and sidesteps the toast read entirely.
+      // 不保留现有 row。早期 migration 草案尝试 `CREATE ... + INSERT SELECT * + DROP + RENAME`，
+      // 但 PGlite 对 `vector(3072)` column 的 TOAST storage 在 worker 高负载 UPSERT 的生产 DB 中
+      // 触发了 `missing chunk number 0 for toast value ...`。backfill worker 会在 CLI 启动后数分钟
+      // 内惰性重新填充 table，因此删除并重建与 migration 6 的先例一致，也避开 toast read。
       await tx.exec(`DROP TABLE IF EXISTS observation_embeddings`);
       await tx.exec(`
         CREATE TABLE observation_embeddings (
@@ -376,11 +321,9 @@ const MIGRATIONS: Migration[] = [
     version: 8,
     description: "rebuild embeddings table at 4096 dims for qwen/qwen3-embedding-8b",
     up: async (tx) => {
-      // OpenRouter serves `qwen/qwen3-embedding-8b` at 4096 dimensions. Every
-      // existing 3072-dim vector lives in a different latent space, so keeping
-      // them would make cosine similarity against new query embeddings noise.
-      // Drop the table and let the backfill worker repopulate it lazily, the
-      // same precedent as migrations 6 and 7.
+      // OpenRouter 以 4096 维提供 `qwen/qwen3-embedding-8b`。每个现有 3072 维 vector 都处于
+      // 不同的 latent space，因此保留它们会让它们与新 query embedding 的 cosine similarity
+      // 变成噪声。删除 table，让 backfill worker 惰性重新填充；与 migration 6、7 的先例一致。
       await tx.exec(`DROP TABLE IF EXISTS observation_embeddings`);
       await tx.exec(`
         CREATE TABLE observation_embeddings (
@@ -395,19 +338,17 @@ const MIGRATIONS: Migration[] = [
 ];
 
 export interface MigrationResult {
-  /** Schema version the database was at before `runMigrations` was called. */
+  /** `runMigrations` 调用前数据库所在的 schema version。 */
   fromVersion: number;
-  /** Schema version the database is at after `runMigrations` returns. */
+  /** `runMigrations` 返回后数据库所在的 schema version。 */
   toVersion: number;
-  /** Versions actually applied this call (empty when already up to date). */
+  /** 本次调用实际应用的 version（已是最新时为空）。 */
   applied: number[];
 }
 
 /**
- * Bring the database up to the latest known schema version. Idempotent;
- * safe to call on every open. Throws on the first failure with the
- * triggering migration's version in the message so users have a place to
- * look without grepping.
+ * 将 database 更新到已知的最新 schema version。幂等；每次打开都可以安全调用。首次失败时抛出
+ * 错误，message 中包含触发 migration 的 version，用户无需 grep 就知道去哪里查看。
  */
 export async function runMigrations(db: PGlite): Promise<MigrationResult> {
   await db.exec(`
@@ -451,8 +392,8 @@ export async function runMigrations(db: PGlite): Promise<MigrationResult> {
   };
 }
 
-/** Latest version known to this build. Exported for tests. */
+/** 此 build 已知的最新 version。导出供测试使用。 */
 export const LATEST_SCHEMA_VERSION: number = MIGRATIONS.at(-1)?.version ?? 0;
 
-/** All registered migrations. Exported for tests. */
+/** 所有已注册的 migration。导出供测试使用。 */
 export const REGISTERED_MIGRATIONS: readonly Migration[] = MIGRATIONS;

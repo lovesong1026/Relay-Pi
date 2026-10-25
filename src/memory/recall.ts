@@ -226,8 +226,7 @@ async function generateQueryParaphrases(query: string, model: string): Promise<s
         description: "返回用户查询的其他表述。",
         parameters: paraphraseSchema,
       },
-      systemPrompt:
-        "将记忆检索查询改写为 2 种不同表述。保持意图不变，替换术语表达。不要回答查询。",
+      systemPrompt: "将记忆检索查询改写为 2 种不同表述。保持意图不变，替换术语表达。不要回答查询。",
       prompt: `原始查询：${query}`,
     });
     return result.paraphrases.slice(0, 2);

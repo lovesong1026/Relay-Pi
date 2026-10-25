@@ -3,12 +3,10 @@ import { existsSync } from "node:fs";
 import { dirname, delimiter } from "node:path";
 
 /**
- * Resolve the path to the ripgrep binary bundled via `@vscode/ripgrep`.
+ * 解析通过 `@vscode/ripgrep` 捆绑的 ripgrep 二进制文件路径。
  *
- * Returns `null` (instead of throwing) when the platform-specific optional
- * dependency was not installed — for example, on an unsupported platform or
- * when `npm install --no-optional` was used. Callers fall back to the
- * user's `$PATH` in that case.
+ * 当未安装特定平台的可选依赖时返回 `null`（而不是抛出异常）——例如在不受支持的平台上，
+ * 或使用 `npm install --no-optional` 时。此时调用方会回退到用户的 `$PATH`。
  */
 async function resolveBundledRgPath(): Promise<string | null> {
   try {
@@ -18,12 +16,12 @@ async function resolveBundledRgPath(): Promise<string | null> {
       return rgPath;
     }
   } catch {
-    // Optional dep missing for this platform — fall back silently.
+    // 此平台缺少可选依赖；静默回退。
   }
   return null;
 }
 
-// Cache so we only resolve and probe the filesystem once per process.
+// 缓存结果，使每个进程只解析并探测一次文件系统。
 let rgDirPromise: Promise<string | null> | undefined;
 
 async function getBundledRgDir(): Promise<string | null> {
@@ -34,13 +32,10 @@ async function getBundledRgDir(): Promise<string | null> {
 }
 
 /**
- * Wrap a `BashOperations` implementation so the bundled `rg` binary is on
- * `PATH` for every command.
+ * 包装一个 `BashOperations` 实现，使每条命令的 `PATH` 中都包含捆绑的 `rg` 二进制文件。
  *
- * We prepend (not append) intentionally: the bundled version is a known-good
- * ripgrep that the agent has been tested against, so we want it to win over
- * any older system install the user happens to have on PATH. Power users who
- * need a different `rg` can shell out to the absolute path explicitly.
+ * 有意将其置于开头（而非末尾）：捆绑版本是已经过 Agent 测试的已知可用 ripgrep，
+ * 因此应优先于用户恰好在 PATH 中安装的旧版。需要不同 `rg` 的高级用户可以显式调用绝对路径。
  */
 export function withBundledRipgrep(base: BashOperations): BashOperations {
   return {
@@ -51,7 +46,7 @@ export function withBundledRipgrep(base: BashOperations): BashOperations {
       }
       const baseEnv = options.env ?? process.env;
       const currentPath = baseEnv.PATH ?? process.env.PATH ?? "";
-      // Avoid duplicating the entry on repeated calls.
+      // 避免重复调用时重复添加该条目。
       const alreadyPresent = currentPath.split(delimiter).some((segment) => segment === rgDir);
       const nextPath = alreadyPresent ? currentPath : `${rgDir}${delimiter}${currentPath}`;
       return base.exec(command, cwd, {

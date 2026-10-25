@@ -2,15 +2,13 @@ import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { TurnStepEvent } from "../types/protocol.js";
 
 /**
- * Build a translator from pi agent events to turn step events.
+ * 将 pi Agent 事件转换为回合步骤事件。
  *
- * The translator is stateful: pi's `tool_execution_end` does not carry the
- * tool arguments, but the canonical `tool_call` step is self-contained (it
- * echoes the call's `input`, mirroring how the canonical `text` step carries
- * the full text after `text_delta`). Each call's input is remembered from
- * `tool_execution_start` until its end event arrives. Tool call ids are
- * unique across the parent and state agents, so one translator per runner is
- * enough.
+ * 转换器是有状态的：pi 的 `tool_execution_end` 不携带工具参数，但规范的
+ * `tool_call` 步骤是自包含的（会回显调用的 `input`，这与 `text_delta` 之后
+ * 规范的 `text` 步骤携带完整文本的方式一致）。每次调用的 input 都会从
+ * `tool_execution_start` 记住，直到对应的结束事件到达。工具调用 ID 在父
+ * Agent 与 state Agent 之间也是唯一的，因此每个 runner 只需一个转换器。
  */
 export function createAgentEventTranslator(): (event: AgentEvent) => TurnStepEvent[] {
   const inputByToolCallId = new Map<string, Record<string, any> | undefined>();
@@ -81,7 +79,7 @@ export function agentMessageText(message: AgentMessage): string {
     .join("\n");
 }
 
-/** Whether an agent event has crossed the transport-fallback replay boundary. */
+/** 判断 Agent 事件是否已越过传输回退重放边界。 */
 export function isExternallyVisibleAgentEvent(event: AgentEvent): boolean {
   if (event.type === "tool_execution_start" || event.type === "tool_execution_end") return true;
   if (event.type !== "message_update") return false;

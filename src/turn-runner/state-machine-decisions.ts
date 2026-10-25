@@ -54,25 +54,25 @@ type AskOutcome = { type: "ask"; questions: TurnQuestion[] };
 type SleepOutcome = { type: "sleep"; wakeAt: number };
 type InterruptedOutcome = { type: "interrupted" };
 
-/** Serializable shell work selected by state-machine policy. */
+/** 由 state machine 策略选择的可序列化 shell 工作。 */
 export interface ShellSpec {
-  /** Rendered command for this state attempt. */
+  /** 此次 state 尝试渲染后的命令。 */
   command: string;
-  /** State-local working directory; the turn loop resolves it against its base cwd. */
+  /** state 本地工作目录；回合循环会将其解析到基础 cwd。 */
   cwd?: string;
-  /** Hard runtime limit for script states; polls use their timeout as a session-level policy. */
+  /** script state 的硬运行时限制；poll 使用其 timeout 作为 Session 级策略。 */
   timeoutMs?: number;
-  /** Exit codes that settle the shell attempt successfully. */
+  /** 令 shell 尝试成功结束的退出 code。 */
   successCodes?: number[];
 }
 
-/** Policy needed to fold a non-successful shell attempt back into a scheduled poll. */
+/** 将未成功的 shell 尝试折回已调度 poll 所需的策略。 */
 export interface PollPolicy {
-  /** Delay before the next poll attempt. */
+  /** 下次 poll 尝试前的延迟。 */
   intervalMs: number | string;
 }
 
-/** Execution-free work description produced by a state-machine decision. */
+/** state machine 决策产生的、不执行工作的描述。 */
 export type PlannedWork =
   | { park: { stateName: string } }
   | { run: { subagent: SubagentSpec; stateName: string } }
@@ -86,7 +86,7 @@ export type PlannedWork =
       };
     };
 
-/** Effective selection retained until the executor has constructed the actual work. */
+/** 在 executor 构造实际工作之前保留的有效选择。 */
 export interface ExecutionSelection {
   state: StateMachineAgentState | StateMachineScriptState;
   input?: Record<string, unknown>;
@@ -94,11 +94,11 @@ export interface ExecutionSelection {
 }
 
 export interface PlannedDecision {
-  /** Immediate work does not enter started history until task admission succeeds. */
+  /** 只有 task admission 成功后，即时工作才会进入 started 历史。 */
   selection?: ExecutionSelection;
-  /** Updated durable ledger after applying and recording the decision. */
+  /** 应用并记录决策后更新的持久 ledger。 */
   session: StateMachineSession;
-  /** Execution or scheduling work the turn loop performs. */
+  /** 回合循环执行的工作或调度工作。 */
   work: PlannedWork;
 }
 
@@ -345,10 +345,9 @@ export function planWake(
   resolveTimerWakeAt(state, stateMachine, now);
   return {
     session: stateMachine,
-    // A wake command means the persisted timer has fired. The turn loop's
-    // schedule branch completes immediately when wakeAt is not in the future;
-    // preserve the old `runTimerState(state, true)` behavior even if the
-    // caller's clock arrives a few milliseconds before the stored deadline.
+    // wake 命令表示持久化 timer 已触发。`wakeAt` 不在未来时，回合循环的 schedule 分支会立即完成；
+    // 即使调用方的时钟比存储的 deadline 早几毫秒，也要保留旧的
+    // `runTimerState(state, true)` 行为。
     work: { schedule: { wakeAt: now, stateName: state.name } },
   };
 }
@@ -655,7 +654,7 @@ function misconfiguredPollGateMessage(stateName: string, successStreak: number):
   );
 }
 
-/** Canonical JSON keeps object-key order from manufacturing apparent progress. */
+/** 规范化 JSON，避免对象 key 顺序制造表面上的进展。 */
 function executionHash(value: unknown): string {
   const canonical = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(canonical);
@@ -673,7 +672,7 @@ function executionHash(value: unknown): string {
     .digest("hex");
 }
 
-/** Build evidence from the executor's prepared work, never from the proposed call alone. */
+/** 从 executor 准备好的实际工作构建证据，绝不只从提议的调用构建。 */
 export function executionReceipt(input: {
   id: string;
   selection: ExecutionSelection;

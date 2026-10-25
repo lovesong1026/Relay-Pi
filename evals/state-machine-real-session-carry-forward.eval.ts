@@ -60,7 +60,7 @@ describe("state machine real session c_cGfNEIotLU carry-forward", () => {
               // 来自原始 session 的原样 prompt。静态短语“修复根本原因”和“之前发现的损坏 DB”
               // 在全新的子 Agent 上下文中没有具体指代——父 Agent 必须在选择该状态时，
               // 通过 override.prompt 或 input 向前传递调查和诊断结果。
-                prompt:
+              prompt:
                 "在仓库中修复根本原因（采用最小且正确的改动，遵循 AGENTS.md：不要添加薄封装，保持名称与当前设计一致，运行类型检查、lint 和相关测试；会写文件的测试必须通过 docker 运行）。然后编写恢复脚本，以只读方式打开每个损坏的数据库，导出可恢复的行（尝试 `.recover`、`.dump`，以及逐行 SELECT 并跳过错误），再将数据重新插入同一路径上的全新数据库（先将损坏文件备份为 `<path>.corrupt-<timestamp>`）。针对前面发现的实际损坏数据库运行恢复脚本，并分别报告每个数据库恢复和丢失的行数。返回：可用于提交的修复摘要、验证输出（类型检查/lint/测试）以及恢复统计。",
               // Bound the sub-agent for eval cost. The carry-forward decision
               // we are measuring happens at transition time, before this

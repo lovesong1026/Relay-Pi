@@ -17,7 +17,7 @@ export class SkillContext {
   private skills: Skill[];
   private collisions: SkillCollision[] = [];
   private loaded = false;
-  /** Shared async discovery so concurrent callers never observe the unexpanded baseline. */
+  /** 共享异步发现流程，确保并发调用方不会观察到未展开的基线。 */
   private loading?: Promise<void>;
 
   constructor(private readonly config: TurnRunnerConfig) {
@@ -36,15 +36,14 @@ export class SkillContext {
   }
 
   /**
-   * Re-run skill discovery so newly installed skills show up without
-   * restarting the session. The initial explicit skill list from
-   * `config.skills` is preserved; on-disk discovery is re-read.
+   * 重新运行 skill 发现，使新安装的 skill 无需重启 Session 就能出现。
+   * `config.skills` 中最初的显式 skill 列表会保留；磁盘上的发现结果会重新读取。
    */
   async reload(): Promise<void> {
     const prior = this.loading;
     const loading = (async () => {
-      // Queue reloads so an older discovery snapshot cannot finish last and
-      // overwrite a newer one. A failed prior load must not prevent retry.
+      // 将 reload 排队，避免较旧的发现快照最后完成并覆盖较新的快照。
+      // 之前的加载失败也不能阻止重试。
       await prior?.catch(() => undefined);
       this.loaded = false;
       await this.load();
@@ -80,7 +79,7 @@ export class SkillContext {
     return skill ? readSkillInstructions(skill) : "";
   }
 
-  /** Resolve a sub-agent allowlist while preserving a caller-specific error label. */
+  /** 解析子 Agent 的 allowlist，同时保留调用方特定的错误标签。 */
   resolveSubagentSkills(allowedSkills: string[] | undefined, owner: string): Skill[] | undefined {
     if (!allowedSkills) return undefined;
 
@@ -94,12 +93,11 @@ export class SkillContext {
   }
 
   /**
-   * Expand `/skill` slash commands in a prompt into injected `<skill>` blocks.
-   * `skills` scopes which skills are eligible to expand; callers pass a
-   * restricted set (e.g. a state's `allowedSkills`) so a sub-agent only expands
-   * skills it actually has. Defaults to every discovered skill, which is what
-   * the parent prompt path wants. Passing `undefined` for an unrestricted child
-   * also falls through to the full set.
+   * 将 prompt 中的 `/skill` slash 命令展开为注入的 `<skill>` 块。
+   * `skills` 限制可展开的 skill 范围；调用方传入受限集合（例如 state 的
+   * `allowedSkills`），这样子 Agent 只会展开它实际拥有的 skill。默认使用所有已发现的
+   * skill，这是父 prompt 路径所需的行为。对于不受限制的子 Agent，传入 `undefined` 也会
+   * 回退到完整集合。
    */
   resolveSlashSkillPrompt(prompt: string, skills: readonly Skill[] = this.skills): string {
     const slash = parseSlashCommands(prompt);
@@ -113,9 +111,8 @@ export class SkillContext {
       const instructions = readSkillInstructions(skill).trim();
       skillBlocks.push(
         [
-          // path= lets the agent edit the SKILL.md directly without a
-          // discovery step when the user asks to modify the skill itself
-          // (e.g. "add this rule to /review").
+          // path= 允许 Agent 在用户要求修改 skill 本身时直接编辑 SKILL.md，
+          // 无需执行发现步骤（例如“将此规则添加到 /review”）。
           `<skill name="${skill.name}" path="${skill.filePath}">`,
           "Use the following skill instructions for this request.",
           "<instructions>",
@@ -145,17 +142,15 @@ export class SkillContext {
     });
   }
 
-  /** System-prompt files (AGENTS.md by default) that exist on disk. */
+  /** 磁盘上存在的系统提示词文件（默认是 AGENTS.md）。 */
   getResolvedAgentFiles(): TurnAgentFile[] {
     const cwd = this.config.cwd ?? process.cwd();
     const fileNames = this.config.systemPromptFiles ?? ["AGENTS.md"];
     const resolved: TurnAgentFile[] = [];
     for (const fileName of fileNames) {
-      // Hosts like the chat-app agent-gateway pass an absolute path to a
-      // session-scoped system-prompt file that lives outside `cwd`. `join`
-      // would strip the leading slash and turn it into a non-existent path
-      // under `cwd`, silently dropping the layer, so honor absolute paths
-      // verbatim and only join when the caller passed a relative name.
+      // chat-app agent-gateway 等宿主会传入位于 `cwd` 外部、属于 Session 的系统提示词文件绝对路径。
+      // `join` 会去掉开头的斜杠，将其变成 `cwd` 下不存在的路径并静默丢弃该层，因此应原样
+      // 使用绝对路径；只有调用方传入相对名称时才执行拼接。
       const path = isAbsolute(fileName) ? fileName : join(cwd, fileName);
       if (existsSync(path)) {
         resolved.push({ name: isAbsolute(fileName) ? basename(fileName) : fileName, path });
@@ -180,16 +175,13 @@ export class SkillContext {
   }
 }
 
-// Matches the self-closing `<Skill name="..." path="..." />` tag that the
-// chat-app compose-bar `/` skill picker emits on both web and mobile when a
-// user selects a skill (see
+// 匹配 chat-app compose-bar 的 `/` skill 选择器发出的自闭合 `<Skill name="..." path="..." />` 标签；
+// 用户在 web 和 mobile 上选择 skill 时都会发出该标签（参见
 // apps/web/components/chat/compose-bar/primitives/input/features/mention/mention-markdown-codec.ts
-// and apps/mobile/src/lib/markdown.ts). We honor the tag as an alias for the
-// bare `/<name>` slash command so picker-driven activations get the same
-// SKILL.md injection as keyboard-typed ones. The tag spelling is fixed by
-// the chat-app codec, so capitalization is exact and the regex stays loose
-// only around the `name="..."` attribute position so other attributes (like
-// `path="..."`) can sit on either side.
+// 和 apps/mobile/src/lib/markdown.ts）。我们将此标签视为裸 `/<name>` slash 命令的别名，
+// 使选择器驱动的激活与键盘输入的激活注入相同的 SKILL.md。标签拼写由 chat-app codec 固定，
+// 因此大小写必须精确；正则表达式只对 `name="..."` 属性的位置保持宽松，以允许其他属性
+// （如 `path="..."`）出现在它的任一侧。
 const SKILL_TAG_PATTERN = /<Skill\b[^>]*\bname="([A-Za-z0-9_.-]+)"[^>]*\/>/g;
 
 function parseSlashCommands(prompt: string): {

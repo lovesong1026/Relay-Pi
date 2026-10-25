@@ -6,7 +6,7 @@ import type { TurnEvent } from "../../../src/types/protocol.js";
 import type { CampaignConfigName } from "./config-override.js";
 import type { RolloutTelemetry } from "./telemetry.js";
 
-/** Logical rollout identity shared by immutable retry attempts. */
+/** 不可变重试 attempt 共享的逻辑 rollout 身份。 */
 export interface RolloutIdentity {
   campaignId: string;
   config: CampaignConfigName;
@@ -14,15 +14,15 @@ export interface RolloutIdentity {
   trial: number;
 }
 
-/** Frozen inputs whose hash decides whether an artifact can be resumed. */
+/** 哈希决定 artifact 能否恢复的冻结输入。 */
 export interface RolloutArtifactSpec extends RolloutIdentity {
-  /** Human-readable official harness reference resolved for this task. */
+  /** 为此任务解析出的可读官方 harness 引用。 */
   image: string;
-  /** Immutable Docker content identity actually used to launch the rollout. */
+  /** 实际用于启动 rollout 的不可变 Docker 内容身份。 */
   imageId: string;
   relayPiSha256: string;
   configSha256: string;
-  /** Hash of the benchmark-owned system instruction passed identically to every arm. */
+  /** 传给每个 arm 且完全相同的基准测试自有系统指令哈希。 */
   systemPromptSha256: string;
   promptSha256: string;
   limits: {
@@ -35,7 +35,7 @@ export interface RolloutArtifactSpec extends RolloutIdentity {
 
 export type RolloutFailureKind = "agent" | "infra" | "patch";
 
-/** Atomic completion marker; its absence or `running` phase means crashed work. */
+/** 原子完成标记；缺失或处于 `running` 阶段表示工作崩溃。 */
 export interface RolloutStatus {
   schemaVersion: 1;
   phase: "running" | "completed" | "failed";
@@ -49,24 +49,24 @@ export interface RolloutStatus {
   costUsd?: number;
 }
 
-/** One immutable filesystem attempt and its current marker. */
+/** 一个不可变 filesystem attempt 及其当前标记。 */
 export interface RolloutAttempt {
   directory: string;
   spec: RolloutArtifactSpec;
   status: RolloutStatus;
 }
 
-/** Stable SHA-256 for a JSON-compatible value with caller-controlled key order. */
+/** 对由调用方控制键顺序的 JSON 兼容值计算稳定 SHA-256。 */
 export function hashJson(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-/** SHA-256 of exact text bytes such as a prompt or committed render. */
+/** 对 prompt 或已提交 render 等精确文本字节计算 SHA-256。 */
 export function hashText(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-/** Allocate a new attempt without mutating any earlier failed or crashed attempt. */
+/** 分配新的 attempt，不修改任何更早的失败或崩溃 attempt。 */
 export async function beginRolloutAttempt(
   runsRoot: string,
   spec: RolloutArtifactSpec,
@@ -97,7 +97,7 @@ export async function beginRolloutAttempt(
   return { directory, spec, status };
 }
 
-/** Finalize a successful attempt; `status.json` is renamed last. */
+/** 完成成功的 attempt；最后才重命名 `status.json`。 */
 export async function completeRolloutAttempt(
   attempt: RolloutAttempt,
   values: {
@@ -124,7 +124,7 @@ export async function completeRolloutAttempt(
   return status;
 }
 
-/** Finalize a failed attempt while preserving all evidence available at failure time. */
+/** 完成失败的 attempt，同时保留失败时可用的所有证据。 */
 export async function failRolloutAttempt(
   attempt: RolloutAttempt,
   values: {
@@ -158,7 +158,7 @@ export async function failRolloutAttempt(
   return status;
 }
 
-/** Read every attempt marker for status, budget, and resume planning. */
+/** 读取每个 attempt 的标记，用于状态、预算和恢复规划。 */
 export async function loadRolloutAttempts(
   runsRoot: string,
   campaignId: string,
@@ -176,8 +176,7 @@ export async function loadRolloutAttempts(
         ]);
         attempts.push({ directory, spec, status });
       } catch {
-        // A process can die between directory creation and its first atomic
-        // marker. Such a directory is incomplete evidence, never completed work.
+        // 进程可能在创建目录到写入首个原子标记之间退出。此目录是未完成的证据，绝不能视为已完成工作。
       }
     }
   }

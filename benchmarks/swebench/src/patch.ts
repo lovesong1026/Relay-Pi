@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { CommandResult } from "./container.js";
-/** Minimal container operations required by staged-index patch handling. */
+/** staged-index patch 处理所需的最小容器操作。 */
 export interface PatchContainer {
   exec(
     argv: readonly string[],
@@ -9,26 +9,25 @@ export interface PatchContainer {
   ): Promise<CommandResult>;
 }
 
-/** Private Git tree representing the official image before the model runs. */
+/** 官方镜像在模型运行前的私有 Git tree。 */
 export interface PatchBaseline {
   indexPath: string;
   tree: string;
-  /** Pre-existing image modifications retained for provenance, never submitted. */
+  /** 为 provenance 保留的镜像已有修改，绝不提交。 */
   paths: string[];
 }
 
-/** Exact agent delta submitted to the official scorer. */
+/** 提交给官方 scorer 的精确 Agent 增量。 */
 export interface ExtractedPatch {
   patch: string;
   bytes: number;
-  /** Every path changed by the agent and included in the official prediction. */
+  /** Agent 修改并纳入官方 prediction 的每个路径。 */
   paths: string[];
 }
 
 /**
- * Snapshot the official image's working tree without requiring `git status` to
- * be clean. Some official images deliberately modify build files (for example,
- * Druid pins a Maven resource bundle); resetting them changes the benchmark.
+ * 对官方镜像的工作树创建快照，不要求 `git status` 干净。某些官方镜像会有意修改
+ * 构建文件（例如 Druid 固定了 Maven resource bundle）；重置这些文件会改变基准测试。
  */
 export async function capturePatchBaseline(container: PatchContainer): Promise<PatchBaseline> {
   const indexPath = `/tmp/relay-pi-index-${randomUUID()}`;
@@ -49,7 +48,7 @@ export async function capturePatchBaseline(container: PatchContainer): Promise<P
   return { indexPath, tree, paths: splitPaths(names.stdout) };
 }
 
-/** Stage the final worktree over its captured baseline and emit only the agent delta. */
+/** 基于捕获的 baseline 暂存最终工作树，并只输出 Agent 增量。 */
 export async function extractPatch(
   container: PatchContainer,
   baseline: PatchBaseline,
@@ -94,7 +93,7 @@ export async function extractPatch(
   return { patch, bytes, paths: changedPaths };
 }
 
-/** Apply a patch to the same official baseline and prove it reproduces the path set. */
+/** 将 patch 应用到同一官方 baseline，并证明它还原了路径集合。 */
 export async function verifyPatchRoundTrip(
   container: PatchContainer,
   extracted: ExtractedPatch,

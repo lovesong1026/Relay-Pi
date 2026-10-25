@@ -40,9 +40,9 @@ describe("bash task wait budget", () => {
         });
       });
 
-      // Falsification (run 2026-07-19): reinstating a 5s inner kill in
-      // withoutBashKillTimeout makes the completed-settlement assertion red — the
-      // 8s sleep dies at 5s and settles failed. Restored green after revert.
+      // 反证记录（运行于 2026-07-19）：在
+      // withoutBashKillTimeout 中恢复 5s 的内部终止会使已完成 settlement 的断言变红——
+      // 8s 的 sleep 会在 5s 时终止并以 failed 状态 settlement。还原后恢复为绿色。
       const terminal = await (
         await startTurn(runner, {
           mode: "agent",

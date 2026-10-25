@@ -5,48 +5,46 @@ import { walkAncestors } from "../../lib/walk-ancestors.js";
 import { DEFAULT_MEMORY_DB_PATH } from "../paths.js";
 import { discoverMemoryStores } from "./discovery.js";
 
-/** Ordered source paths collected from repeatable CLI backend flags. */
+/** 从可重复 CLI backend flag 收集的、有序 source 路径。 */
 export interface MemorySourceFlags {
-  /** Explicit memory-file directories, in command-line order. */
+  /** 显式指定的 memory-file 目录，按命令行顺序排列。 */
   stores: string[];
-  /** Explicit PGlite files, in command-line order. */
+  /** 显式指定的 PGlite 文件，按命令行顺序排列。 */
   dbs: string[];
 }
 
-/** The single backend selected for a create operation. */
+/** create 操作选定的唯一 backend。 */
 export interface MemoryWriteTarget {
-  /** Selects the file-store or legacy PGlite persistence path. */
+  /** 选择 file-store 或旧版 PGlite 持久化路径。 */
   kind: "store" | "db";
-  /** Absolute store directory or PGlite data path. */
+  /** 绝对 store 目录或 PGlite 数据路径。 */
   path: string;
 }
 
-/** Effective read sources plus the create-operation target implied by them. */
+/** 有效的读取 source，以及由其推导出的 create-operation target。 */
 export interface MemorySources {
-  /** File stores in collision-precedence order. */
+  /** 按 collision precedence 排列的 file store。 */
   stores: string[];
-  /** PGlite paths in collision-precedence order after every file store. */
+  /** 在所有 file store 之后，按 collision precedence 排列的 PGlite 路径。 */
   dbs: string[];
-  /** Present only when the invocation selects exactly one write backend. */
+  /** 仅当本次调用恰好选择了一个 write backend 时存在。 */
   writeTarget?: MemoryWriteTarget;
 }
 
-/** One backend's already-projected listing rows. */
+/** 一个 backend 已投影的 listing row。 */
 export interface SourceListing<T> {
-  /** Absolute backend path; file-store groups stamp it as row provenance. */
+  /** 绝对 backend 路径；file-store group 会将它写入 row 作为 provenance。 */
   source: string;
-  /** Rows returned by this backend before collision resolution. */
+  /** 该 backend 在 collision resolution 之前返回的 row。 */
   entries: readonly T[];
 }
 
 /**
- * Resolve explicit flags or the skills-style flagless source set.
+ * 解析显式 flag，或 skills 风格的不带 flag source 集合。
  *
- * Any explicit backend flag replaces discovery. Without flags, reads inherit
- * every existing memory store from cwd toward the filesystem root and then
- * consult the default DB. Writes target the nearest ancestor that owns an
- * `.agents` directory, falling back to cwd when no agent marker exists; the
- * `memories` child itself is allowed to be absent because writers create it.
+ * 任一显式 backend flag 都会替换发现结果。没有 flag 时，读取会继承从 cwd 向文件系统根目录
+ * 的所有现有 memory store，然后查询默认 DB。写入目标是拥有 `.agents` 目录的最近 ancestor；
+ * 如果没有 Agent 标记则回退到 cwd；`memories` 子目录本身可以不存在，因为 writer 会创建它。
  */
 export async function resolveSources(
   flags: MemorySourceFlags,
@@ -77,12 +75,11 @@ export async function resolveSources(
 }
 
 /**
- * Merge projected rows under the one canonical ordering policy.
+ * 按唯一的 canonical ordering policy 合并投影后的 row。
  *
- * File-store groups precede DB groups; within each family the caller supplies
- * nearest-to-root or explicit flag order. The first row for a slug wins that
- * collision. Only after shadowed copies are removed are all winners sorted
- * newest-first, with the precedence order retained for timestamp ties.
+ * File-store group 位于 DB group 之前；每个 family 内部的最近 ancestor 或显式 flag 顺序由
+ * 调用方提供。同一 slug 的 collision 取第一条。移除被遮蔽副本后，所有 winner 再按最新优先
+ * 排序；时间戳相同则保留 precedence 顺序。
  */
 export function mergeListings<T extends { slug: string; createdAt: number }>(
   storeEntries: readonly SourceListing<T>[],

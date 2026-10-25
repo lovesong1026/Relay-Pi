@@ -12,7 +12,7 @@ import type { RolloutTelemetry } from "./telemetry.js";
 const SMOKE_CONFIG = "glm-pure" satisfies CampaignConfigName;
 const SENTINEL_PATH = "relay-pi-swebench-smoke.txt";
 
-/** Inputs for one paid packaging and gateway smoke in an official image. */
+/** 官方镜像中一次付费 packaging 与 gateway smoke 所需的输入。 */
 export interface ContainerSmokeSpec {
   entry: ManifestEntry;
   datasetRow: DatasetRow;
@@ -22,7 +22,7 @@ export interface ContainerSmokeSpec {
   limits: RunRolloutSpec["limits"];
 }
 
-/** Live evidence emitted after the patch also reproduces in a fresh container. */
+/** patch 应用后在全新容器中也能复现的实时证据。 */
 export interface ContainerSmokeResult {
   instanceId: string;
   artifactDirectory: string;
@@ -34,8 +34,8 @@ export interface ContainerSmokeResult {
 }
 
 /**
- * Exercise the exact production rollout path with a deterministic one-file
- * task, then prove its patch applies byte-for-byte to a fresh official image.
+ * 使用一个确定性的单文件任务执行精确的生产 rollout 路径，随后证明其 patch
+ * 可逐字节应用到全新的官方镜像。
  */
 export async function runContainerSmoke(
   dependencies: RunRolloutDependencies,

@@ -1,32 +1,26 @@
 /**
- * Client for OpenRouter embeddings.
+ * OpenRouter embedding client。
  *
- * Routes through OpenRouter's OpenAI-compatible endpoint
- * (`POST https://openrouter.ai/api/v1/embeddings`) gated by the user's
- * `OPENROUTER_API_KEY`, the same credential that carries model traffic.
+ * 通过 OpenRouter 的 OpenAI-compatible endpoint（`POST https://openrouter.ai/api/v1/embeddings`）
+ * 发送请求，由用户的 `OPENROUTER_API_KEY` 控制访问；这是承载 model 流量的同一凭据。
  *
- * The requested model defaults to `qwen/qwen3-embedding-8b` and can be
- * overridden with `RELAY_PI_EMBEDDING_MODEL`. We store the model echoed by the
- * response alongside each vector so a future model swap can invalidate stale
- * rows by tag.
+ * 请求的 model 默认是 `qwen/qwen3-embedding-8b`，可通过 `RELAY_PI_EMBEDDING_MODEL` 覆盖。
+ * 我们将 response 返回的 model 与每个 vector 一起存储，以便未来更换 model 时按 tag 使旧 row 失效。
  *
- * Behavior:
- *   - Inputs are batched up to `EMBEDDING_BATCH_LIMIT` per HTTP call so
- *     a single backfill batch never goes over the request body cap.
- *   - 5xx responses, 429 rate limits, and network errors retry with
- *     exponential backoff; other 4xx responses (auth, malformed) fail
- *     fast since retrying will not change the outcome.
- *   - When `OPENROUTER_API_KEY` is missing the function throws a typed error
- *     so callers can degrade to keyword-only retrieval (the recall_memory
- *     tool catches it and logs once; the backfill worker logs and sleeps
- *     until a credential appears).
+ * 行为：
+ *   - 输入会按每次 HTTP 调用最多 `EMBEDDING_BATCH_LIMIT` 条分批，因此一次 backfill batch
+ *     不会超过 request body 上限。
+ *   - 5xx response、429 rate limit 和 network error 使用指数退避重试；其他 4xx response
+ *    （认证、格式错误）快速失败，因为重试不会改变结果。
+ *   - 缺少 `OPENROUTER_API_KEY` 时函数抛出带类型的错误，使调用方可以退化为仅 keyword 检索
+ *    （recall_memory tool 负责捕获并只记录一次；backfill worker 记录日志并休眠，直到凭据出现）。
  */
 
-/** Embedding dimensions expected by the pgvector column. */
+/** pgvector 列所需的 embedding 维度。 */
 export const EMBEDDING_DIMENSIONS = 4096;
-/** Maximum input strings sent in a single embedding request. */
+/** 单次 embedding request 发送的输入字符串最大数量。 */
 export const EMBEDDING_BATCH_LIMIT = 100;
-/** Current embedding default; matches the 4096-dim pgvector table. */
+/** 当前 embedding 默认值；与 4096 维 pgvector 表一致。 */
 export const DEFAULT_EMBEDDING_MODEL = "qwen/qwen3-embedding-8b";
 export const EMBEDDING_MODEL_ENV = "RELAY_PI_EMBEDDING_MODEL";
 
@@ -38,19 +32,15 @@ const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 500;
 
 /**
- * Result of an `EmbedFn` call. `model` is the identifier the server
- * reported alongside the vectors; storage tags each row with it so a
- * later model swap can invalidate stale rows by string match.
+ * `EmbedFn` 调用的结果。`model` 是 server 随 vector 返回的标识；storage 将它写入每个
+ * row 的 tag，使未来更换 model 时可以使旧 row 失效。
  */
 export interface EmbedResult {
   embeddings: number[][];
   model: string;
 }
 
-/**
- * Callable shape consumed by the backfill worker and the recall_memory
- * tool. Inputs map 1:1 to `embeddings`.
- */
+/** backfill worker 和 recall_memory tool 使用的可调用形状。输入与 `embeddings` 一一对应。 */
 export type EmbedFn = (inputs: string[]) => Promise<EmbedResult>;
 
 export class EmbeddingUnavailableError extends Error {
@@ -62,31 +52,23 @@ export class EmbeddingUnavailableError extends Error {
 
 export interface CreateEmbeddingClientOptions {
   /**
-   * Override the API key resolver. Defaults to reading `OPENROUTER_API_KEY`
-   * from `process.env`. Tests inject a fixed value to exercise the
-   * client without touching environment state.
+   * 覆盖 API key resolver。默认从 `process.env` 读取 `OPENROUTER_API_KEY`。
+   * 测试注入固定值，以便不触碰环境状态地测试 client。
    */
   apiKey?: string | (() => string | undefined);
-  /**
-   * Override the API base URL. Defaults to OpenRouter's public API origin.
-   */
+  /** 覆盖 API base URL。默认使用 OpenRouter 的公开 API origin。 */
   baseUrl?: string;
-  /**
-   * Override the requested embedding model. Defaults to
-   * `RELAY_PI_EMBEDDING_MODEL`, then `DEFAULT_EMBEDDING_MODEL`.
-   */
+  /** 覆盖请求的 embedding model。默认依次使用 `RELAY_PI_EMBEDDING_MODEL` 和 `DEFAULT_EMBEDDING_MODEL`。 */
   model?: string;
   /**
-   * Override the fetch implementation. Tests use this to assert request
-   * shape and stub responses without standing up a real server.
+   * 覆盖 fetch 实现。测试使用它断言 request shape 并 stub response，而无需启动真实 server。
    */
   fetch?: typeof fetch;
 }
 
 /**
- * Build an `EmbedFn` bound to OpenRouter's embedding endpoint. Constructed
- * once per process and reused for every backfill batch and every
- * `recall_memory` query so connection reuse can amortize TLS setup.
+ * 构造绑定到 OpenRouter embedding endpoint 的 `EmbedFn`。每个进程只构造一次，并复用于
+ * 每个 backfill batch 和每个 `recall_memory` query，使连接复用可以摊薄 TLS 建连成本。
  */
 export function createEmbeddingClient(options: CreateEmbeddingClientOptions = {}): EmbedFn {
   const baseUrl = options.baseUrl ?? DEFAULT_OPENROUTER_BASE_URL;
@@ -97,8 +79,7 @@ export function createEmbeddingClient(options: CreateEmbeddingClientOptions = {}
     if (inputs.length === 0) return { embeddings: [], model: "" };
     const apiKey = resolveApiKey(options.apiKey);
     if (!apiKey) {
-      // Throwing a typed error lets callers branch on graceful
-      // degradation without string-matching the message.
+      // 抛出带类型的错误，让调用方无需通过字符串匹配 message 就能分支处理优雅退化。
       throw new EmbeddingUnavailableError(
         "OPENROUTER_API_KEY is not set; embeddings unavailable. Run `relay-pi env --keys` to enable hybrid memory retrieval.",
       );
@@ -121,10 +102,8 @@ export function createEmbeddingClient(options: CreateEmbeddingClientOptions = {}
         );
       }
       embeddings.push(...batch.embeddings);
-      // The server returns the same model on every batch within a call.
-      // Take the last one so the caller sees what the server most
-      // recently agreed to; mid-call mismatches are not a thing we
-      // currently need to reconcile.
+      // server 在一次调用的每个 batch 中返回相同的 model。取最后一个，使调用方看到 server
+      // 最近确认的值；当前无需协调调用中途的 mismatch。
       responseModel = batch.model;
     }
     return { embeddings, model: responseModel };
@@ -157,10 +136,8 @@ async function postBatch(options: PostBatchOptions): Promise<EmbedResult> {
         return { embeddings: body.data.map((entry) => entry.embedding), model: body.model };
       }
 
-      // 4xx errors (auth, malformed input) will not improve on retry;
-      // surface them immediately so callers see the real cause. 429 is
-      // the exception: a rate limit clears on its own, so it falls
-      // through to the same backoff-and-retry path as 5xx.
+      // 4xx 错误（认证、格式错误）重试也不会改善，因此立即返回，让调用方看到真实原因。
+      // 429 是例外：rate limit 会自行清除，因此走与 5xx 相同的退避重试路径。
       if (response.status >= 400 && response.status < 500 && response.status !== 429) {
         const detail = await safeReadText(response);
         throw new EmbeddingUnavailableError(
@@ -170,7 +147,7 @@ async function postBatch(options: PostBatchOptions): Promise<EmbedResult> {
 
       lastError = new Error(`Embedding endpoint returned ${response.status}`);
     } catch (error) {
-      // Re-throw typed errors immediately; only retry on transport-level failures.
+      // 立即重新抛出带类型的错误；只对 transport 层失败重试。
       if (error instanceof EmbeddingUnavailableError) throw error;
       lastError = error;
     }
@@ -185,7 +162,7 @@ async function postBatch(options: PostBatchOptions): Promise<EmbedResult> {
     : new Error(`Embedding request failed after ${MAX_RETRIES} attempts`);
 }
 
-/** OpenAI-compatible embedding response returned by OpenRouter. */
+/** OpenRouter 返回的 OpenAI-compatible embedding response。 */
 interface EmbeddingResponseEnvelope {
   data: Array<{ embedding: number[] }>;
   model: string;

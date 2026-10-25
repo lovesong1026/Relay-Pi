@@ -1,17 +1,17 @@
 import dedent from "dedent";
 
-/** Minimal unattended-run contract shared byte-for-byte by every arm. */
+/** 所有 arm 逐字节共享的最小无人值守运行契约。 */
 export const SWEBENCH_SYSTEM_PROMPT = dedent`
   Resolve the task in the repository and leave the working tree with the complete solution. Work unattended.
 `;
 
-/** Canonical issue input shared byte-for-byte by every arm for one instance. */
+/** 所有 arm 逐字节共享的规范 issue 输入。 */
 export interface RolloutPromptInput {
-  /** Canonical `problem_statement` from the pinned dataset revision. */
+  /** 固定数据集 revision 中规范的 `problem_statement`。 */
   problemStatement: string;
 }
 
-/** Return the dataset issue verbatim apart from surrounding whitespace. */
+/** 原样返回数据集 issue，除了去除首尾空白。 */
 export function buildRolloutPrompt(input: RolloutPromptInput): string {
   if (!input.problemStatement.trim()) {
     throw new Error("Problem statement is empty.");

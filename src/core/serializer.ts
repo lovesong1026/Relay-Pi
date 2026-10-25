@@ -29,11 +29,11 @@ export function assistantText(messages: AgentMessage[]): string {
 }
 
 /**
- * Concatenate every assistant message's text content in order. Useful when a
- * caller cares whether a token appears anywhere in the parent transcript, not
- * just in the latest assistant message — e.g. acknowledgment-turn evals where
- * the model may emit the token on the SM1 ack while SM2's ack adds a trailing
- * summary that would otherwise shadow it in `assistantText`.
+ * 按顺序拼接每条助手消息的文本内容。当调用方关心某个
+ * token 是否出现在父对话记录中的任意位置，而不仅是最新
+ * 助手消息时很有用——例如确认回合评测，模型
+ * 可能在 SM1 的确认中输出该 token，而 SM2 的确认追加
+ * 了尾部摘要，否则会在 `assistantText` 中将其遮蔽。
  */
 export function allAssistantText(messages: AgentMessage[]): string {
   return messages

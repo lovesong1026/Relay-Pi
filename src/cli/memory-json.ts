@@ -6,66 +6,66 @@ import type {
 } from "../types/memory.js";
 
 /**
- * Canonical JSON shape for a single memory row, shared by every command that
- * emits an observation (`memory recall`, `memory` query, `memory add`). Kept
- * in one place — see {@link toMemoryJson} — so consumers parse one type
- * everywhere instead of one shape per command.
+ * 单条记忆记录的规范 JSON 结构，由所有输出观察记录的命令
+ * （`memory recall`、`memory` 查询、`memory add`）共享。集中维护
+ * 于一处（见 {@link toMemoryJson}），使使用方在各处解析同一种类型，
+ * 而非为每个命令解析一种结构。
  *
- * Deviations from the in-memory {@link Observation}:
- *   - `createdAt`/`lastUsedAt` are ISO 8601 strings, not millisecond epochs,
- *     so wire consumers never have to guess the unit.
- *   - `source` is flattened to its `kind` string; the structured
- *     `{ kind, name? }` union is a runtime-only detail.
- *   - The two ranking scores are named explicitly (`packScore`,
- *     `relevanceScore`); there is deliberately no generic `score` field.
+ * 与内存中的 {@link Observation} 的差异：
+ *   - `createdAt`/`lastUsedAt` 是 ISO 8601 字符串，而非毫秒级纪元时间，
+ *     因此传输数据的使用方无需猜测单位。
+ *   - `source` 被展平为其 `kind` 字符串；结构化的
+ *     `{ kind, name? }` 联合类型仅为运行时细节。
+ *   - 两个排名分数都有明确名称（`packScore`、
+ *     `relevanceScore`）；有意不提供通用的 `score` 字段。
  */
 export interface MemoryJson {
-  /** Stable persistence key for the row. */
+  /** 记录的稳定持久化键。 */
   id: string;
-  /** The memory text. */
+  /** 记忆文本。 */
   content: string;
-  /** Raw observation, reflection, single user note, or bulk-curated manual row. */
+  /** 原始观察记录、反思、单条用户笔记或批量整理的手工记录。 */
   kind: ObservationKind;
-  /** Flattened source origin — the `kind` of the structured {@link ObservationSource}. */
+  /** 展平的来源，即结构化 {@link ObservationSource} 的 `kind`。 */
   source: ObservationSource["kind"];
-  /** Importance signal used by recall and context ranking. */
+  /** 回忆和上下文排名使用的重要性信号。 */
   priority: ObservationPriority;
-  /** When the row was stored, as an ISO 8601 timestamp. */
+  /** 记录存储时间，以 ISO 8601 时间戳表示。 */
   createdAt: string;
-  /** Most recent turn that used the row, as an ISO 8601 timestamp. */
+  /** 最近使用该记录的回合时间，以 ISO 8601 时间戳表示。 */
   lastUsedAt: string;
-  /** Calendar date the observation is anchored to. */
+  /** 观察记录所锚定的日历日期。 */
   observedDate: string;
-  /** Concrete date mentioned by the user/tool when different from `observedDate`. */
+  /** 用户/工具提及的具体日期，与 `observedDate` 不同时提供。 */
   referencedDate?: string;
-  /** Original relative date phrase ("tomorrow", "last week") when useful. */
+  /** 有用时保留原始相对日期短语（“明天”、“上周”）。 */
   relativeDate?: string;
-  /** 24-hour local time attached to the observation, when available. */
+  /** 若可用，附在观察记录上的 24 小时制本地时间。 */
   timeOfDay?: string;
   /**
-   * Session that authored the row. Absent on legacy/global rows that predate
-   * session tracking; echoed only when the observation actually carries one.
+   * 创建该记录的会话。早于会话跟踪机制的旧记录/全局记录没有此字段；
+   * 仅在观察记录实际携带时回显。
    */
   sessionId?: string;
-  /** Lightweight filtering/grouping labels. */
+  /** 用于轻量筛选/分组的标签。 */
   tags: string[];
   /**
-   * Global-pack ranking score (recency × priority × kind bias). Included only
-   * when the caller computed a pack score for this row.
+   * 全局记忆包的排名分数（新近度 × 优先级 × 类型偏置）。仅在
+   * 调用方为该记录计算了记忆包分数时包含。
    */
   packScore?: number;
   /**
-   * Query-relevance score (RRF-fused across phrasings). Included only in
-   * `memory recall` output; absent — never null — everywhere else.
+   * 查询相关度分数（跨多种表述进行 RRF 融合）。仅在
+   * `memory recall` 输出中包含；其他情况下省略，绝不为 null。
    */
   relevanceScore?: number;
 }
 
 /**
- * Serialize an {@link Observation} into the canonical {@link MemoryJson}
- * shape. Optional ranking scores are attached only when provided, matching
- * the contract that both scores are named explicitly and omitted rather than
- * emitted as null.
+ * 将 {@link Observation} 序列化为规范的 {@link MemoryJson}
+ * 结构。仅在提供时附加可选排名分数，遵循
+ * 两个分数均明确命名且缺失时省略、而不输出
+ * null 的契约。
  */
 export function toMemoryJson(
   observation: Observation,

@@ -16,13 +16,12 @@ export class ShellCommandError extends Error {
 export interface ShellStateHandle {
   run(): Promise<ShellCommandOutput>;
   /**
-   * Abort the running command and remember why. After `run()` rejects,
-   * callers consult `interruptedReason()` to tell our intentional
-   * cancellation apart from other shell errors.
+   * 中止正在运行的命令并记住原因。`run()` 拒绝后，调用方通过
+   * `interruptedReason()` 区分有意取消与其他 shell 错误。
    */
   interrupt(reason: string): void;
   partialOutput(): ShellPartialOutput | undefined;
-  /** The reason passed to `interrupt()`, or undefined if not interrupted. */
+  /** 传给 `interrupt()` 的原因；未中断时为 undefined。 */
   interruptedReason(): string | undefined;
 }
 
@@ -148,7 +147,7 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void 
     try {
       process.kill(pid, signal);
     } catch {
-      // Process already exited.
+      // 进程已经退出。
     }
   }
 }

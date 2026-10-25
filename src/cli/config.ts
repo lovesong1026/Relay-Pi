@@ -1,10 +1,10 @@
 import { exportRoutingTable } from "../model-routing/loader.js";
 
-/** Process-owned effects used by the routing config command. */
+/** 路由配置命令使用的进程级副作用。 */
 export interface ConfigCommandOptions {
-  /** Project directory where `.relay-pi/models.json` is written. */
+  /** 写入 `.relay-pi/models.json` 的项目目录。 */
   cwd?: string;
-  /** Output sink; defaults to stdout. */
+  /** 输出接收端；默认为 stdout。 */
   write?: (text: string) => void;
 }
 
@@ -14,7 +14,7 @@ function printConfigHelp(write: (text: string) => void): void {
   );
 }
 
-/** Export the complete built-in routing table without silently overwriting edits. */
+/** 导出完整的内置路由表，不静默覆盖已有编辑。 */
 export async function runConfigCommand(
   args: string[],
   options: ConfigCommandOptions = {},

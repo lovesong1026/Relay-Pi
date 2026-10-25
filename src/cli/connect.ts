@@ -20,31 +20,31 @@ import {
 } from "../connected-providers/store.js";
 
 export interface ConnectCommandIO {
-  /** Credential-store seam used by the CLI and replaced with an in-memory store in tests. */
+  /** CLI 使用的凭据存储接入点，测试中可替换为内存存储。 */
   store?: ConnectedProviderStore;
-  /** Write human output or protocol-only JSON to stdout. */
+  /** 将供人阅读的输出或仅含协议内容的 JSON 写入 stdout。 */
   write?: (text: string) => void;
-  /** Write human progress to stderr, independently capturable from protocol stdout. */
+  /** 将供人阅读的进度写入 stderr，可与协议 stdout 分别捕获。 */
   writeError?: (text: string) => void;
-  /** Override the help printer without intercepting global stdout. */
+  /** 无需拦截全局 stdout 即可覆盖帮助打印器。 */
   printHelp?: () => void;
-  /** Environment seam that gates fake-issuer registration in tests and staging. */
+  /** 环境接入点，用于控制测试和预发布环境中的 fake-issuer 注册。 */
   env?: Record<string, string | undefined>;
-  /** Override TTY detection; non-interactive calls always use device-code login. */
+  /** 覆盖 TTY 检测；非交互调用始终使用设备码登录。 */
   interactive?: boolean;
-  /** Override browser launch without changing which OAuth flow runs. */
+  /** 覆盖浏览器启动方式，不改变所运行的 OAuth 流程。 */
   openUrl?: (url: string) => void;
-  /** Read browser-flow fallback input or Copilot enterprise-domain input. */
+  /** 读取浏览器流程的后备输入或 Copilot 企业域名输入。 */
   prompt?: (message: string) => Promise<string>;
   /**
-   * OAuth implementation seam. An implementation hangs off its provider, so a
-   * test that needs a different one injects it here rather than swapping a
-   * registry out from under the command.
+   * OAuth 实现接入点。实现归属于对应 provider，因此
+   * 需要不同实现的测试在此注入，而不是在命令运行时
+   * 替换其依赖的注册表。
    */
   oauth?: (id: ConnectedProviderId) => OAuthAuth;
-  /** Capability seam; production performs a real one-token provider completion. */
+  /** 能力检测接入点；生产环境会执行真实的单 token provider 补全请求。 */
   probe?: typeof probeConnectedProvider;
-  /** Clock used for persisted timestamps and device-code expiry events. */
+  /** 用于持久化时间戳和设备码过期事件的时钟。 */
   now?: () => number;
 }
 
@@ -154,9 +154,9 @@ export async function runConnectCommand(args: string[], io: ConnectCommandIO = {
       write,
       writeError,
       json,
-      // --no-browser only suppresses URL auto-open; it never changes the
-      // OAuth flow. Device-code mode is forced by --device-code, machine
-      // output, or a non-interactive stdin.
+      // --no-browser 仅禁止自动打开 URL，不改变
+      // OAuth 流程。--device-code、机器可读输出或
+      // 非交互 stdin 会强制使用设备码模式。
       forceDeviceCode: deviceCode || json || !(io.interactive ?? Boolean(process.stdin.isTTY)),
       noBrowser,
     });
@@ -209,11 +209,11 @@ async function connectProvider(
 
   let credentials: ConnectionRecord["credentials"];
   try {
-    // pi-ai returns its canonical tagged credential; Relay Pi's store holds the
-    // untagged token, and the tag is re-added at each pi-ai call site.
-    // pi-ai replaced the named login callbacks with one `notify` stream and one
-    // `prompt`, so the CLI switches on the event instead of registering a
-    // handler per kind. The device-code branch stays the only one a VM can use.
+    // pi-ai 返回其规范的带标签凭据；Relay Pi 的存储保存
+    // 不带标签的令牌，并在每个 pi-ai 调用点重新添加标签。
+    // pi-ai 用一个 `notify` 流和一个 `prompt` 替代了具名登录回调，
+    // 因此 CLI 根据事件分支处理，而不是为每种类型注册
+    // 处理器。设备码分支仍是 VM 唯一可用的方式。
     const { type: _tag, ...token } = await (options.oauth?.(id) ?? entry.oauth()).login({
       signal: new AbortController().signal,
       notify: (event) => {
@@ -248,15 +248,15 @@ async function connectProvider(
       prompt: async (request) => {
         if (request.type === "select") {
           const wanted = options.forceDeviceCode ? "device_code" : "browser";
-          // A provider that offers no choice still gets our preference back;
-          // there is nothing to pick from, and every answer is equally arbitrary.
+          // 不提供选项的 provider 仍会收到我们的偏好；
+          // 此时无从选择，任何答案都同样是任意选择。
           return (
             request.options.find((option) => option.id === wanted)?.id ??
             request.options[0]?.id ??
             wanted
           );
         }
-        // Copilot's flow prompts for an optional value the VM cannot answer.
+        // Copilot 的流程会提示输入一个 VM 无法回答的可选值。
         if (id === "github-copilot" && !options.prompt) return "";
         return (options.prompt ?? promptInput)(request.message);
       },

@@ -14,20 +14,20 @@ import {
 
 export interface EnvCommandIO {
   cwd?: string;
-  /** Override interactivity detection so tests can drive the paste flow. */
+  /** 覆盖交互性检测，让测试能驱动粘贴流程。 */
   interactive?: boolean;
-  /** Inject a stand-in for the readline-backed key prompt. */
+  /** 为基于 readline 的密钥提示注入替代实现。 */
   promptForApiKeys?: () => Promise<Map<string, string>>;
-  /** Inject a stand-in for the help-text printer. */
+  /** 为帮助文本打印器注入替代实现。 */
   printHelp?: () => void;
 }
 
 /**
- * Run `relay-pi env`.
+ * 运行 `relay-pi env`。
  *
- * Two modes share a target env file: `--import` copies provider keys from a
- * source env file (cwd .env by default), and `--keys` prompts the user for
- * each supported provider key. Without either flag we just print help.
+ * 两种模式共用一个目标 env 文件：`--import` 从源 env 文件
+ * （默认为 cwd .env）复制 provider 密钥，`--keys` 则提示用户输入
+ * 每个受支持的 provider 密钥。未提供这两个标志时只打印帮助。
  */
 export async function runEnvCommand(args: string[], io: EnvCommandIO = {}): Promise<void> {
   const cwd = io.cwd ?? process.cwd();
@@ -104,10 +104,10 @@ export async function runEnvCommand(args: string[], io: EnvCommandIO = {}): Prom
 }
 
 /**
- * Pull only the provider keys we recognize out of `source` and merge them
- * into `target`. Anything else in `source` (app secrets, unrelated config)
- * is intentionally ignored so we never copy noise into the shared relay-pi env
- * file. Returns the keys that were actually imported.
+ * 仅从 `source` 提取可识别的 provider 密钥并合并到
+ * `target`。有意忽略 `source` 中的其他内容（应用密钥、无关配置），
+ * 避免将无关内容复制到共享的 relay-pi env
+ * 文件中。返回实际导入的密钥。
  */
 async function importEnvFile(source: string, target: string): Promise<readonly string[]> {
   if (resolve(source) === resolve(target)) {
@@ -127,9 +127,9 @@ async function importEnvFile(source: string, target: string): Promise<readonly s
 }
 
 /**
- * Prompt the user for each supported provider key on stderr; blank input
- * skips that key. We use stderr so piping `relay-pi env --keys` does not pollute
- * stdout with prompt text.
+ * 在 stderr 上提示用户输入每个受支持的 provider 密钥；空输入
+ * 跳过该密钥。使用 stderr 是为了让 `relay-pi env --keys` 通过管道运行时，
+ * 提示文本不会污染 stdout。
  */
 async function promptForApiKeys(): Promise<Map<string, string>> {
   const rl = createInterface({

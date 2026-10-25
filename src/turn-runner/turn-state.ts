@@ -8,7 +8,7 @@ import type {
   TurnTerminalEvent,
 } from "../types/protocol.js";
 
-/** Recover only executable selections from saved state, never transcript or workflow history. */
+/** 从保存的 state 中仅恢复可执行的选择，绝不恢复 transcript 或 workflow 历史。 */
 export function restoreSavedExecutionSelections(
   state: TurnState,
   supplied: TurnOptions | undefined,
@@ -32,7 +32,7 @@ export function restoreSavedExecutionSelections(
         supplied?.model === undefined || supplied.model === state.options?.model
           ? chatModel(state.options?.model)
           : supplied.model,
-      // Memory actors resolve concrete catalog names; chat tiers do not shadow them.
+      // Memory actor 会解析具体的 catalog 名称；chat tier 不会遮蔽它们。
       memoryModel:
         supplied?.memoryModel === undefined || supplied.memoryModel === state.options?.memoryModel
           ? normalize(state.options?.memoryModel)

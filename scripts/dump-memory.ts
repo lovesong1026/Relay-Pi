@@ -1,33 +1,30 @@
 /**
- * Dump observations from a `memory.db` PGlite store into JSON for
- * debugging or fixture creation. Default source is the running user's
- * `~/.relay-pi/memory.db`; default destination is stdout.
+ * 将 `memory.db` PGlite 存储中的观察记录转储为 JSON，用于调试或创建 fixture。
+ * 默认来源是当前用户的 `~/.relay-pi/memory.db`，默认目标为 stdout。
  *
- * This is the canonical reproduction step when the agent's observational
- * memory misbehaves: dump the live store, then feed the JSON into an
- * eval (`evals/fixtures/global-reflect/seed.ts`) so the bug becomes
- * deterministic without touching production memory.
+ * 这是观察式记忆出现问题时的规范复现步骤：转储实时存储，再将 JSON
+ * 传给 eval（`evals/fixtures/global-reflect/seed.ts`），这样无需触碰生产记忆
+ * 就能得到确定性复现。
  *
- * Usage:
+ * 用法：
  *   bun run scripts/dump-memory.ts [options]
  *
- * Options:
- *   --db <path>            Source PGlite path (default: ~/.relay-pi/memory.db)
- *   --out <path>           Write to file (default: stdout)
- *   --kind <k>             Filter by row kind: observation | reflection | all (default: all)
- *   --since <iso|days>     Only rows created on/after this date. Accepts
- *                          ISO-8601 (`2026-05-01T00:00:00Z`), `YYYY-MM-DD`,
- *                          or a relative form like `7d` / `48h` meaning
- *                          "newer than that long ago".
- *   --until <iso|days>     Only rows created on/before this date. Same forms.
- *   --session <id>         Only rows for a specific session id. Repeatable;
- *                          pass `__global_reflection__` for global-prune rows.
- *   --priority <p>         Filter by priority: high | medium | low. Repeatable.
- *   --tag <name>           Only rows tagged with <name>. Repeatable; AND across flags.
- *   --limit <n>            Cap the number of rows written (newest first).
- *   --pretty               Pretty-print JSON (default: compact).
- *   --stats                Print a one-line summary to stderr (count, tokens, age range).
- *   -h, --help             Show this help.
+ * 选项：
+ *   --db <path>            PGlite 来源路径（默认：~/.relay-pi/memory.db）
+ *   --out <path>           写入文件（默认：stdout）
+ *   --kind <k>             按记录类型筛选：observation | reflection | all（默认：all）
+ *   --since <iso|days>     仅保留在此日期或之后创建的记录。接受
+ *                          ISO-8601（`2026-05-01T00:00:00Z`）、`YYYY-MM-DD`，
+ *                          或 `7d` / `48h` 这类相对形式，表示“距今不超过该时长”。
+ *   --until <iso|days>     仅保留在此日期或之前创建的记录。格式相同。
+ *   --session <id>         仅保留指定会话 id 的记录。可重复传入；
+ *                          对全局 prune 记录传入 `__global_reflection__`。
+ *   --priority <p>         按优先级筛选：high | medium | low。可重复传入。
+ *   --tag <name>           仅保留带有 <name> 标签的记录。可重复传入；多个选项之间为 AND。
+ *   --limit <n>            限制写出的记录数（按最新优先）。
+ *   --pretty               以易读格式输出 JSON（默认：紧凑格式）。
+ *   --stats                将单行摘要输出到 stderr（数量、token、年龄范围）。
+ *   -h, --help             显示此帮助。
  */
 import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -195,7 +192,7 @@ async function main(): Promise<void> {
   try {
     const snapshot = await readAllObservations(session);
     let rows = snapshot.observations.filter((row) => matches(row, opts));
-    // Newest first so --limit keeps the freshest slice.
+    // 按最新优先，这样 --limit 会保留最新的一段记录。
     rows.sort((a, b) => b.createdAt - a.createdAt);
     if (opts.limit !== undefined) rows = rows.slice(0, opts.limit);
 

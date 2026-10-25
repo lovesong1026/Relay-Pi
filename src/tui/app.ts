@@ -1,8 +1,7 @@
-// Slim orchestrator for the interactive TUI. `runTui` wires the chrome
-// (renderer, layout, controllers) to the live `Session` and returns the
-// terminal event that was active when the user exited. Non-trivial
-// behavior lives in leaf modules under `src/tui/`; this file is the
-// construction sequence plus the `submit` / `handleSteer` coordinators.
+// 交互式 TUI 的轻量编排器。`runTui` 将界面框架（渲染器、布局、控制器）
+// 连接到实时 `Session`，并返回用户退出时生效的终止事件。
+// 复杂行为由 `src/tui/` 下的叶模块负责；本文件只包含构建顺序
+// 以及 `submit` / `handleSteer` 协调逻辑。
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type CliRenderer, type PasteEvent, type Selection } from "@opentui/core";
 import { renderBootScreen } from "./boot-screen.js";
@@ -39,7 +38,7 @@ export type {
   SkillAutocompleteItem,
   SkillAutocompleteReplacement,
 } from "./autocomplete.js";
-// Historical `tui/app.js` re-exports kept for tests + external callers.
+// 保留历史上的 `tui/app.js` 再导出，供测试和外部调用方使用。
 export {
   activeFileAutocompleteToken,
   activeSkillAutocompleteToken,
@@ -65,82 +64,63 @@ export {
 export interface RunTuiInput {
   session: Session;
   initialPrompt?: string;
-  /** Current working directory shown in the startup header. */
+  /** 启动标题中显示的当前工作目录。 */
   workDir: string;
-  /** Session id shown in the startup header and resume context. */
+  /** 启动标题和恢复上下文中显示的会话 ID。 */
   sessionId: string;
-  /** npm package name; labels the auto-upgrade status line. */
+  /** npm 包名，用于标记自动升级状态行。 */
   packageName: string;
-  /** Installed package version shown in the startup header. */
+  /** 启动标题中显示的已安装包版本。 */
   packageVersion: string;
-  /** User-facing model name for this CLI session. */
+  /** 此 CLI 会话中面向用户显示的模型名称。 */
   modelName: string;
-  /** Provenance for modelName (e.g. "inferred from OPENROUTER_API_KEY in .env"). */
+  /** modelName 的来源（例如 "inferred from OPENROUTER_API_KEY in .env"）。 */
   modelSource?: string;
-  /** User-facing model name used for observational memory work. */
+  /** 用于观察式记忆工作的、面向用户显示的模型名称。 */
   memoryModelName: string;
-  /** Provenance for memoryModelName. */
+  /** memoryModelName 的来源。 */
   memoryModelSource?: string;
-  /**
-   * Live status stream from the in-process auto-upgrade flow. The TUI
-   * renders one mutating intro line through "Checking…", "Updating…",
-   * "Updated. Restart relay-pi to use it." Undefined statuses (current,
-   * locked, skipped) hide the line entirely.
+  /** 进程内自动升级流程的实时状态流。TUI 通过一条持续更新的介绍行依次显示
+   * "Checking…"、"Updating…"、"Updated. Restart relay-pi to use it."。
+   * 未定义的状态（current、locked、skipped）会完全隐藏该行。
    */
   upgradeStatus$?: UpgradeStatusStream;
-  /** Past messages to replay into the transcript on resume. */
+  /** 恢复会话时要重放到对话记录中的历史消息。 */
   history?: AgentMessage[];
-  /**
-   * True when this TUI mount is a `--resume <id>` invocation. Suppresses
-   * the boot starter menu so the user lands straight back in the prior
-   * conversation instead of seeing the starter prompts again.
+  /** 本次 TUI 挂载来自 `--resume <id>` 调用时为 true。
+   * 隐藏启动引导菜单，让用户直接回到之前的对话，而不再看到引导提示词。
    */
   isResume?: boolean;
-  /**
-   * Called when the user picks a "pick up the thread" recent-session row.
-   * The outer dispatcher should dispose the current session,
-   * `manager.resume(sessionId)` + `hydrate()` + `start()`, and re-enter
-   * `runTui` with the hydrated session and its replayed history. When
-   * absent (tests, playground), picker rows fall back to re-submitting
-   * the prior prompt as a fresh turn in the current session.
+  /** 用户选择 "pick up the thread" 最近会话行时调用。外层调度器应释放当前会话，
+   * 执行 `manager.resume(sessionId)` + `hydrate()` + `start()`，再以恢复后的会话
+   * 及其重放历史重新进入 `runTui`。未提供时（测试、playground），选择器行会
+   * 退回为在当前会话中将之前的提示词作为新回合重新提交。
    */
   onResumeRequest?: (sessionId: string) => void;
-  /**
-   * Called when the user submits `/clear`. The outer dispatcher should
-   * dispose the current session, `manager.create({})`, and re-enter
-   * `runTui` with the fresh session and no replayed history. The TUI
-   * tears its own renderer down right after invoking this so the
-   * dispatcher's `runTui` promise resolves and the loop can rebuild.
+  /** 用户提交 `/clear` 时调用。外层调度器应释放当前会话，执行 `manager.create({})`，
+   * 再以新会话和空重放历史重新进入 `runTui`。TUI 调用后会立即销毁自己的渲染器，
+   * 使调度器的 `runTui` promise 完成，让循环能够重建。
    */
   onClearRequest?: () => void;
-  /**
-   * Trailing user-turn exchanges to replay from prior history. Each
-   * exchange is the user prompt plus the assistant blocks that followed
-   * it. `0` disables replay; when unset, every block is replayed.
+  /** 从历史中重放的末尾用户回合交互数。每次交互包括用户提示词及其后的助手内容块。
+   * `0` 禁用重放；未设置时重放所有内容块。
    */
   resumeHistoryMessages?: number;
-  /**
-   * Pre-built renderer for tests. When provided, `runTui` skips
-   * `createCliRenderer` and the `globalThis.window` shimming that wraps
-   * it. The test harness in `test/helpers/tui-harness.ts` passes a
-   * `createTestRenderer` instance so mock keys can drive the picker
-   * without a real TTY.
+  /** 供测试使用的预构建渲染器。提供后，`runTui` 会跳过 `createCliRenderer`
+   * 及其外围的 `globalThis.window` 兼容处理。`test/helpers/tui-harness.ts` 中的
+   * 测试框架传入 `createTestRenderer` 实例，让模拟按键无需真实 TTY 即可驱动选择器。
    */
   renderer?: CliRenderer;
 }
 
-/**
- * Runs the interactive TUI for a session and resolves with the terminal
- * event that was active when the user exited.
- */
+/** 为会话运行交互式 TUI，并以用户退出时生效的终止事件完成。 */
 export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | undefined> {
   const renderer = await acquireRenderer(input.renderer);
   const ui = buildLayout(renderer);
 
-  // Drag-selected text cached from the renderer's `selection` event so
-  // /copy + the copy keystroke prefer the user's highlight over the
-  // last-message heuristic, and the bottom hint advertises the keystroke
-  // only while a selection is live.
+  // 从渲染器的 `selection` 事件缓存拖选文本，让 /copy 和复制快捷键优先使用
+  // 用户高亮的内容，而非最后一条消息的启发式选择；底部提示也只在存在选区时
+  // 显示该快捷键。
   let lastSelectionText = "";
 
   const transcriptWriter = new TranscriptWriter(renderer, ui.transcript, {
@@ -151,10 +131,9 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     },
   });
 
-  // Record + render a user-attributed transcript block. Centralized so every
-  // code path that shows a `you:` block also refreshes the banner anchor
-  // and body. Returns the rendered lines so callers that want to group
-  // trailing rows (e.g. attachment summaries) with the user block can do so.
+  // 记录并渲染归属于用户的对话记录块。集中处理，以便所有显示 `you:` 块的路径
+  // 都刷新横幅锚点和正文。返回渲染后的行，供调用方将后续行
+  // （例如附件摘要）与用户块归为一组。
   function appendUserBlock(message: string) {
     transcriptWriter.recordEntry("user", message);
     const lines = transcriptWriter.appendBlock("you:", message, COLORS.user);
@@ -170,15 +149,13 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
   const recordTranscriptEntry = (kind: TranscriptEntry["kind"], text: string) =>
     transcriptWriter.recordEntry(kind, text);
 
-  // Show the sticky banner only when the latest `you:` block has scrolled
-  // off the top of the transcript viewport (i.e. the user scrolled the
-  // transcript down past their last message). When the block is still on
-  // screen or sits below the viewport (user scrolled up to read earlier
-  // history), the banner stays hidden. OpenTUI's `Renderable#y` getter
-  // walks the parent chain and already folds in `content.translateY =
-  // -scrollTop`, so child `screenY` values are in the same root-cumulative
-  // coordinate space as `viewport.screenY`; comparing against `scrollTop`
-  // (content-space) would mix coordinate systems.
+  // 仅在最新的 `you:` 块已滚出对话记录视口顶部时显示固定横幅
+  // （即用户向下滚动，越过了自己的最后一条消息）。该块仍在屏幕内，
+  // 或位于视口下方（用户向上滚动查看更早历史）时，横幅保持隐藏。
+  // OpenTUI 的 `Renderable#y` getter 会沿父链遍历，并已计入
+  // `content.translateY = -scrollTop`，所以子节点的 `screenY` 与
+  // `viewport.screenY` 位于同一根节点累计坐标系；与内容坐标系中的
+  // `scrollTop` 比较会混用坐标系。
   function refreshLatestUserBannerVisibility(): void {
     const lines = transcriptWriter.getLatestUserBlock();
     if (lines.length === 0) {
@@ -191,12 +168,9 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     ui.latestUserBanner.visible = scrolledAboveViewport;
   }
 
-  // Yoga lays out children asynchronously and ScrollBoxRenderable does not
-  // emit a scroll event, so poll on a short interval to keep the banner in
-  // sync with both new content (which shifts the sticky-bottom view) and
-  // manual scrolling. 100 ms is fast enough to feel responsive while staying
-  // well below the per-frame cost; the visibility check is just a handful
-  // of property reads.
+  // Yoga 异步布局子节点，ScrollBoxRenderable 又不会发出滚动事件，
+  // 因此以短间隔轮询，让横幅同时跟上新增内容（会移动贴底视图）和手动滚动。
+  // 100 ms 足以保持响应灵敏，开销也远低于逐帧处理；可见性检查只需读取几个属性。
   const bannerWatcher = setInterval(refreshLatestUserBannerVisibility, 100);
 
   let refreshActiveTools: () => void = () => undefined;
@@ -223,10 +197,9 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
   refreshActiveTools = () => stepRenderer.refreshActiveToolBlocks();
   refreshTaskLane = () => taskLaneRenderer.refresh();
 
-  // Dino panel: an opt-in mini-game that lives below the input box.
-  // Ctrl-G toggles it at any time; the agent's busy/idle transitions
-  // drive freeze/resume so the world automatically pauses the moment
-  // the user is needed and runs the 3-2-1 countdown when work resumes.
+  // 恐龙面板是位于输入框下方、按需开启的小游戏。Ctrl-G 可随时切换；
+  // Agent 的忙碌/空闲转换驱动冻结与恢复，在需要用户时立即自动暂停世界，
+  // 工作恢复时执行 3-2-1 倒计时。
   const dinoPanel = createDinoPanel({ renderer });
   ui.dinoPanel.add(dinoPanel.view);
   const unsubscribeDino = statusController.onRunningChange((running) => {
@@ -245,7 +218,7 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     escapeState.suppress = true;
   };
 
-  // Boot starter prompts; skipped on --resume so call sites null-check.
+  // 启动引导提示词；--resume 时跳过，因此调用处需要检查 null。
   const starters = input.isResume
     ? undefined
     : new StarterSection({
@@ -300,23 +273,22 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     popSuppression,
   });
 
-  // Esc cancels the in-flight turn; idle Esc is a no-op.
+  // Esc 取消进行中的回合；空闲时 Esc 不做任何操作。
   function handleEscape(): void {
     if (!statusController.isRunning()) return;
     void input.session.interrupt().catch(reportError);
   }
 
-  // Ctrl+C is a small state machine rather than an immediate quit:
-  //   0. running turn + empty composer + queued follow-ups → pop the newest
-  //                      queued entry back into the composer (one per press),
-  //                      leaving the turn running.
-  //   1. running turn  → interrupt it (identical to Esc), no exit prompt.
-  //   2. composer text → clear the composer (multiline included) only;
-  //                       attachments, autocomplete, and picker state stay.
-  //   3. idle + empty  → first press arms a persistent exit confirmation,
-  //                       a second press (or Enter) quits.
-  // The exit itself reuses `renderer.destroy()`, the same teardown the old
-  // OpenTUI exitOnCtrlC handler used, so shutdown semantics are unchanged.
+  // Ctrl+C 使用一个小状态机，而非立即退出：
+  //   0. 回合运行中 + 输入框为空 + 有排队的后续消息 → 将最新排队项弹回输入框
+  //                      （每次按键弹出一项），让回合继续运行。
+  //   1. 回合运行中 → 中断回合（与 Esc 相同），不显示退出提示。
+  //   2. 输入框有文本 → 只清空输入框（包括多行文本）；
+  //                       附件、自动补全和选择器状态保持不变。
+  //   3. 空闲 + 输入框为空 → 首次按键启用持续显示的退出确认，
+  //                          再次按键（或 Enter）退出。
+  // 退出本身复用 `renderer.destroy()`，与原 OpenTUI exitOnCtrlC 处理器
+  // 使用的销毁方式相同，因此关闭语义不变。
   function handleCtrlC(): void {
     if (
       statusController.isRunning() &&
@@ -348,25 +320,18 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     statusController.showExitConfirm();
   }
 
-  // Shared dispatch for submit (follow_up) and Ctrl+Enter (steer): log the
-  // user message + attachments, hand the prompt to the session, flip the
-  // chrome to "running".
+  // submit（follow_up）和 Ctrl+Enter（steer）的共享调度：记录用户消息与附件，
+  // 将提示词交给会话，并将界面框架切换为 "running"。
   async function dispatchTurn(message: string, behavior: "follow_up" | "steer"): Promise<void> {
-    // Auto-attach any image-shaped paths the user typed or dragged into the
-    // compose buffer. Drag-from-screenshot-thumbnail on macOS is the
-    // motivating case: the terminal synthesizes keystrokes instead of firing
-    // a paste event, and the tempfile under `NSIRD_screencaptureui_*`
-    // disappears within seconds of the thumbnail dismissing. Scanning on
-    // submit captures the bytes before that race resolves badly.
+    // 自动附加用户键入或拖入编辑缓冲区的图像路径。主要场景是 macOS 上从截图缩略图
+    // 拖入：终端会合成按键，而非触发粘贴事件，且 `NSIRD_screencaptureui_*` 下的
+    // 临时文件会在缩略图关闭后几秒内消失。提交时扫描可在竞态导致失败前捕获字节。
     await pasteController.autoAttachFromMessage(message).catch(reportError);
     const pending = pasteController.consume();
-    // Suppress the transcript `you:` block for follow-ups that are about
-    // to be queued behind an in-flight turn: the runner will keep them in
-    // `state.followUpQueue` until the active work settles, and the
-    // follow-up panel above the compose row already surfaces them. The
-    // session subscription emits the deferred `you:` block when the
-    // runner drains the entry and delivers it to the agent. Steer
-    // messages skip the queue entirely, so they always render here.
+    // 对于即将排在进行中回合之后的后续消息，不显示对话记录中的 `you:` 块：
+    // 运行器会将其保留在 `state.followUpQueue` 中，直到当前工作结束，
+    // 而编辑行上方的后续消息面板已经展示了它们。运行器取出该项并交给 Agent 时，
+    // 会话订阅才发出延迟的 `you:` 块。Steer 消息完全绕过队列，因此始终在此渲染。
     const queued = behavior === "follow_up" && statusController.isRunning();
     if (!queued) {
       appendUserBlock(message);
@@ -376,8 +341,7 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
       }
     }
     const images = pending.map((p) => p.attachment);
-    // Treat typed message as a flush so collected partial answers are not
-    // dropped on the floor.
+    // 将键入消息视为一次刷新，以免丢失已收集的部分答案。
     if (behavior === "follow_up" && questionPicker.isOpen()) {
       questionPicker.flushWithMessage(message, images);
       return;
@@ -386,8 +350,8 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     if (!statusController.isRunning()) statusController.markRunning();
   }
 
-  // Ctrl+Enter: behavior:"steer" so the runner calls agent.steer() at
-  // the next inference boundary instead of queueing behind the full turn.
+  // Ctrl+Enter 使用 behavior:"steer"，让运行器在下一个推理边界调用
+  // agent.steer()，而不是排在整个回合之后。
   function handleSteer(): void {
     const message = ui.inputField.plainText.trim();
     if (message.length === 0) return;
@@ -395,9 +359,8 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     void dispatchTurn(message, "steer").catch(reportError);
   }
 
-  // Plain Enter: slash-style local commands → shared dispatch (which
-  // handles question-picker flush → follow_up turn). The boot starter
-  // chrome is destroyed on the first user-driven submit.
+  // 普通 Enter：斜杠式本地命令 → 共享调度（处理问题选择器刷新 → follow_up 回合）。
+  // 首次由用户发起提交时销毁启动引导界面。
   function submit(message: string): void {
     if (starters && !starters.isPermanentlyDismissed()) {
       starters.destroyPermanently();
@@ -421,13 +384,11 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     if (tryDispatchSlashCommand(message, slashCtx)) {
       return;
     }
-    // Whole-message dispatch missed; fall back to inline application so
-    // commands work anywhere inside a longer prompt (`hey can you review
-    // this /model gpt-5.5`). Each matched slash form fires its handler
-    // and is stripped out of the message; the leftover `residue` is what
-    // the agent sees. When the residue is empty (the whole prompt was
-    // slash commands), we skip the turn entirely — mirrors the
-    // `tryDispatchSlashCommand` early-return above.
+    // 整条消息调度未命中；退回到内联应用，让命令可在较长提示词的任意位置生效
+    // （`hey can you review this /model gpt-5.5`）。每个匹配的斜杠形式都会触发
+    // 对应处理器，并从消息中移除；剩余的 `residue` 才是 Agent 看到的内容。
+    // 若剩余内容为空（整条提示词都是斜杠命令），则完全跳过回合，
+    // 与上面的 `tryDispatchSlashCommand` 提前返回行为一致。
     const { residue } = applyInlineSlashCommands(message, slashCtx);
     if (residue.length === 0) return;
     void dispatchTurn(residue, "follow_up").catch(reportError);
@@ -455,17 +416,15 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
     onExitConfirmCancel: () => statusController.clearExitConfirm(),
   });
 
-  // Typing hides starter chrome; backspacing empty brings it back until
-  // the user submits.
+  // 键入时隐藏引导界面；在用户提交前，退格至空会再次显示。
   ui.inputField.onContentChange = () => {
     starters?.syncVisibility();
     autocomplete.refresh();
   };
   ui.inputField.onCursorChange = () => autocomplete.refresh();
 
-  // Binary-clipboard paste: terminals that forward image bytes (kitty,
-  // ghostty, recent iTerm2) land here; text pastes fall through to the
-  // Textarea's default insert path.
+  // 二进制剪贴板粘贴：转发图像字节的终端（kitty、ghostty、新版 iTerm2）进入此处；
+  // 文本粘贴则继续走 Textarea 的默认插入路径。
   ui.inputField.onPaste = (event: PasteEvent) => {
     void pasteController.handlePasteEvent(event).catch((error) => {
       appendBlock("[paste]", error instanceof Error ? error.message : String(error), COLORS.error);
@@ -508,9 +467,8 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
   });
 
   await waitForRendererDestroy(renderer, () => {
-    // Ctrl+C destroys text buffers synchronously. Tear down timers and
-    // stop accepting chrome writes before resolving so in-flight session
-    // events do not land on a dead TextBuffer.
+    // Ctrl+C 会同步销毁文本缓冲区。在完成前先销毁计时器，并停止接受界面写入，
+    // 避免进行中的会话事件落到已销毁的 TextBuffer 上。
     transcriptWriter.markDestroyed();
     statusController.shutdown();
     unsubscribeDino();
@@ -522,11 +480,9 @@ export async function runTui(input: RunTuiInput): Promise<TurnTerminalEvent | un
   return statusController.lastTerminal();
 }
 
-/**
- * Clamp the body of the sticky "latest user message" banner so it does not
- * dominate the screen for long pastes. We keep at most {@link BANNER_MAX_LINES}
- * raw lines and append an ellipsis when more was trimmed; the banner itself
- * soft-wraps so visual height may still exceed the raw line count.
+/** 限制固定的“最新用户消息”横幅正文，避免长粘贴内容占满屏幕。
+ * 最多保留 {@link BANNER_MAX_LINES} 个原始行，截去更多内容时追加省略号；
+ * 横幅本身会软换行，所以实际显示高度仍可能超过原始行数。
  */
 const BANNER_MAX_LINES = 3;
 function clampBannerBody(text: string): string {

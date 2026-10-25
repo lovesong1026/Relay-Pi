@@ -3,41 +3,30 @@ import type { Observation, ObservationKind, ObservationPriority } from "../types
 import { estimateTokens } from "./observational.js";
 
 /**
- * Loads ranked memory packs for rendering above the message tail.
+ * 加载用于渲染在 message tail 之前的排序 memory pack。
  *
- * The loader splits durable memory into two layers along a single axis —
- * does the row's session_id match the current runner's session?
+ * loader 沿一个轴将持久化 memory 分成两层——当前 row 的 session_id 是否匹配当前运行器的 Session？
  *
- *   - Local layer: rows whose session_id equals the current session. The
- *     current session's compacted view of itself (observations + the
- *     reflection that may have replaced them). Rendered chronologically
- *     and unranked because it represents the conversation's own
- *     compaction summary; reordering it would lose the time signal.
+ *   - Local 层：session_id 等于当前 Session 的 row。当前 Session 对自身的压缩视图
+ *     （observation 加上可能替换它们的 reflection）按时间顺序、不排序地渲染，因为它代表
+ *     对话自身的压缩摘要；重新排序会丢失时间信号。
  *
- *   - Global layer: every other session's rows, ranked by
- *     `priority * usageDecay * kindBias`. Reflections rank higher than
- *     raw observations through `reflectionBias`, and manual (user-curated)
- *     rows rank higher still through `manualBias`. Greedy-fitted to a
- *     fixed token budget so the prompt prefix stays bounded regardless
- *     of how big the durable memory database has grown.
+ *   - Global 层：其他所有 Session 的 row，按 `priority * usageDecay * kindBias` 排序。
+ *     Reflection 通过 `reflectionBias` 排在 raw observation 之前，manual（用户精选）row
+ *     再通过 `manualBias` 排在更前。使用固定 token budget 贪心适配，使 prompt 前缀无论持久化
+ *     memory 数据库增长到多大都保持有界。
  *
- * The two layers are intentionally rendered with separate headings so
- * the model can tell what comes from this conversation versus what
- * comes from accumulated cross-session knowledge. The render order is
- * `system prompt -> global -> local -> message history`: the global
- * pack is the most stable prefix (rebuilt only on compaction), local
- * is medium-stability (replaced on each reflection), and the message
- * tail is the only part that grows turn over turn.
+ * 两层刻意使用不同 heading 渲染，让 model 能区分当前对话内容和跨 Session 累积的知识。
+ * 渲染顺序为 `system prompt -> global -> local -> message history`：global pack 最稳定
+ *（只在压缩时重建），local 稳定性居中（每次 reflection 替换），message tail 是唯一逐回合增长的部分。
  *
- * Ranking is pushed entirely into SQL. The full score
- * `priority * 0.5^((now - last_used_at) / h) * kindBias` factors as
- * `const(now) * priority * 2^(last_used_at / h) * kindBias`; the
- * `const(now)` term is the same for every candidate in one ranking
- * pass and so cannot affect order. Equivalently in log space,
- * `rank = ln(priority) + ln(kindBias) + last_used_at / h`. That is a
- * pure function of columns and config — Postgres does the work, the
- * `idx_obs_kind_priority_lastused` index covers the ORDER BY, and JS
- * only does the final greedy token-budget fit.
+ * 排序完全下推到 SQL。完整 score
+ * `priority * 0.5^((now - last_used_at) / h) * kindBias` 可分解为
+ * `const(now) * priority * 2^(last_used_at / h) * kindBias`；`const(now)` 在一次 ranking pass
+ * 的所有候选中相同，因此不会影响顺序。等价的 log 空间形式是
+ * `rank = ln(priority) + ln(kindBias) + last_used_at / h`。它只依赖 column 和 config——
+ * Postgres 完成计算，`idx_obs_kind_priority_lastused` index 覆盖 ORDER BY，JS 只做最后的
+ * greedy token-budget fit。
  */
 
 export const PRIORITY_WEIGHT: Record<ObservationPriority, number> = {
@@ -46,27 +35,25 @@ export const PRIORITY_WEIGHT: Record<ObservationPriority, number> = {
   low: 1,
 };
 
-/** Tunable inputs to {@link observationScore}; mirror the loader's ranking config. */
+/** `observationScore` 的可调输入；对应 loader 的 ranking config。 */
 export interface ObservationScoreOptions {
-  /** Half-life in milliseconds applied to time since `lastUsedAt`. */
+  /** 应用于距 `lastUsedAt` 时间的半衰期（毫秒）。 */
   recencyHalfLifeMs: number;
-  /** Multiplier applied to `kind = 'reflection'` rows. */
+  /** 应用于 `kind = 'reflection'` row 的乘数。 */
   reflectionBias: number;
-  /** Multiplier applied to `kind = 'manual'` rows. */
+  /** 应用于 `kind = 'manual'` row 的乘数。 */
   manualBias: number;
-  /** Multiplier applied to `kind = 'note'` rows. */
+  /** 应用于 `kind = 'note'` row 的乘数。 */
   noteBias: number;
 }
 
 /**
- * Compute the absolute global-pack score for one observation:
- * `priorityWeight * 0.5^((now - lastUsedAt)/halfLife) * kindBias`.
+ * 计算一条 observation 的绝对 global-pack score：
+ * `priorityWeight * 0.5^((now - lastUsedAt)/halfLife) * kindBias`。
  *
- * {@link loadGlobalPack}'s SQL ranking only needs the monotone log-space form
- * because the `0.5^(now/h)` term is constant within a single ranking pass.
- * Callers that want the real numeric value per row — e.g. the `relay-pi memory`
- * TUI rendering a score column, which orders by this exact score — use this so
- * the displayed number matches the formula the runner ranks by.
+ * {@link loadGlobalPack} 的 SQL ranking 只需要单调的 log-space 形式，因为 `0.5^(now/h)`
+ * 在一次 ranking pass 内是常量。希望得到每个 row 的真实数值时——例如 `relay-pi memory`
+ * TUI 渲染 score 列并按此 exact score 排序——调用此函数，确保显示值与运行器使用的公式一致。
  */
 export function observationScore(
   observation: Pick<Observation, "priority" | "kind" | "lastUsedAt">,
@@ -88,39 +75,31 @@ export function observationScore(
 
 export interface LoadGlobalPackOptions {
   /**
-   * Session whose rows are excluded from the global pack. The current
-   * runner's session lives in the local pack at full fidelity, so
-   * counting its rows in the global ranking would double-count and
-   * push out cross-session signal. Pass `undefined` to include every
-   * row (e.g. for the `recall_memory` tool when the user wants
-   * unrestricted search).
+   * 从 global pack 中排除其 row 的 Session。当前运行器的 Session 以完整 fidelity 位于 local
+   * pack，因此将它们计入 global ranking 会重复计算，并挤出跨 Session signal。传入 `undefined`
+   * 会包含所有 row（例如用户希望不受限制地搜索时的 `recall_memory` tool）。
    */
   excludeSessionId?: string;
-  /** Maximum tokens of `content` packed into the result. Defaults to 8000. */
+  /** 结果中 `content` 的最大 token 数，默认为 8000。 */
   tokenBudget?: number;
-  /** Half-life in milliseconds applied to time since `last_used_at`. */
+  /** 应用于距 `last_used_at` 时间的半衰期（毫秒）。 */
   recencyHalfLifeMs: number;
-  /** Reflection bias multiplier applied as a `kind = 'reflection'` factor. */
+  /** 作为 `kind = 'reflection'` factor 应用的 reflection bias 乘数。 */
   reflectionBias: number;
-  /** Manual bias multiplier applied as a `kind = 'manual'` factor. */
+  /** 作为 `kind = 'manual'` factor 应用的 manual bias 乘数。 */
   manualBias: number;
-  /** Note bias multiplier applied as a `kind = 'note'` factor. */
+  /** 作为 `kind = 'note'` factor 应用的 note bias 乘数。 */
   noteBias: number;
 }
 
 /**
- * Load the highest-ranked rows from every session except the caller's,
- * up to the token budget. Returns rows ordered by descending rank so
- * the renderer can preserve the ranking visually.
+ * 从除调用方外的每个 Session 加载最高排名的 row，直到达到 token budget。返回值按排名
+ * 降序排列，使 renderer 可以在视觉上保留排序。
  *
- * The SQL `ORDER BY` materializes
- * `ln(priority) + ln(kindBias) + last_used_at / h`, which is monotone
- * in the full score, so the database returns rows in the exact order
- * the runtime ranking would. JS then walks the result greedily,
- * skipping rows that would overflow the token budget but continuing
- * past them — a smaller row later in the ranking may still fit, and
- * leaving the budget half-empty just because the highest-ranked row
- * is a long reflection would waste prompt space.
+ * SQL `ORDER BY` 物化 `ln(priority) + ln(kindBias) + last_used_at / h`；它相对于完整
+ * score 单调，因此数据库返回的顺序与 runtime ranking 完全一致。JS 随后贪心遍历结果，
+ * 跳过会超出 token budget 的 row 但继续向后看——排名更后面的较小 row 仍可能适配；仅因为
+ * 最高排名的 row 是长 reflection 就让预算空一半，会浪费 prompt 空间。
  */
 export async function loadGlobalPack(
   db: PGlite,
@@ -128,10 +107,8 @@ export async function loadGlobalPack(
 ): Promise<Observation[]> {
   const tokenBudget = options.tokenBudget ?? 8000;
 
-  // Upper bound on how many rows could ever fit: assume each row is
-  // at least ~50 tokens of content. Asking the planner for more than
-  // this is wasted work; asking for fewer risks the greedy-fit
-  // exhausting candidates before the budget closes.
+  // 能够适配的 row 数量上限：假设每条 row 至少有约 50 token 的内容。向 planner 请求更多是
+  // 无用工作；请求更少则有风险在 budget 用尽前耗尽 greedy-fit 候选。
   const candidateLimit = Math.max(50, Math.ceil(tokenBudget / 50));
 
   const params: unknown[] = [
@@ -145,11 +122,9 @@ export async function loadGlobalPack(
   ];
   let scopeClause = "";
   if (options.excludeSessionId !== undefined) {
-    // NULL session_id rows (legacy, pre-sessionId tracking) are kept
-    // in the global pool because they cannot match any current
-    // session. Without `IS DISTINCT FROM` Postgres would treat
-    // NULL = X as NULL, which filters those legacy rows out of every
-    // query.
+    // NULL session_id row（旧版、sessionId tracking 之前）保留在 global pool，因为它们不可能
+    // 匹配任何当前 Session。没有 `IS DISTINCT FROM` 时，Postgres 会将 NULL = X 视为 NULL，
+    // 从而在每次 query 中过滤掉这些旧 row。
     scopeClause = `WHERE session_id IS DISTINCT FROM $${params.length + 1}`;
     params.push(options.excludeSessionId);
   }
@@ -193,13 +168,10 @@ export interface LoadLocalPackOptions {
 }
 
 /**
- * Load every row this session produced, ordered chronologically. The
- * local pack represents the session's own compaction summary — the
- * observations and reflections that replaced earlier transcript — so
- * it is rendered whole regardless of size. Bounding the local layer
- * is the existing observer/reflector pipeline's job: their thresholds
- * keep this set from unbounded growth, and a reflection condenses it
- * back down when it gets too large.
+ * 加载此 Session 产生的每个 row，按时间顺序排列。Local pack 表示 Session 自己的压缩摘要——
+ * 替换早期 transcript 的 observation 和 reflection——因此无论大小都完整渲染。Local 层的
+ * 有界性由现有 observer/reflector pipeline 负责：它们的阈值防止集合无限增长，过大时由
+ * reflection 再次将其压缩。
  */
 export async function loadLocalPack(
   db: PGlite,

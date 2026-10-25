@@ -22,47 +22,47 @@ import {
 import { compareSemverVersions, fetchLatestPackageVersion } from "./version-check.js";
 
 /**
- * Why this exists: the CLI ships several versions per hour. Manual `relay-pi
- * upgrade` lags behind, so each launch probes the registry and — when a
- * newer version exists — runs the package manager's global install in the
- * background while the user is already using the TUI. The next launch is
- * then already on latest.
+ * 设计缘由：CLI 每小时发布多个版本。手动执行 `relay-pi
+ * upgrade` 会滞后，因此每次启动都会探测注册表，并在发现
+ * 新版本时在后台运行包管理器的全局安装，
+ * 同时用户已经可以使用 TUI。下次启动时
+ * 就已是最新版本。
  *
- * Concurrency safety:
- *   - The package manager mutates the global install path in place. Already-
- *     running CLI processes do not re-read those files, so they are unaffected.
- *   - A CLI that *starts* mid-install could see partial files. We minimize
- *     that window with an exclusive lockfile so only one process upgrades at
- *     a time; others fall through and observe whatever state currently exists.
- *   - Stale locks (worker crash, OS kill) older than STALE_LOCK_MS are
- *     reclaimed so a missed unlink does not permanently disable upgrades.
+ * 并发安全：
+ *   - 包管理器会原地修改全局安装路径。已经运行的
+ *     CLI 进程不会重新读取这些文件，因此不受影响。
+ *   - 安装中途*启动*的 CLI 可能看到不完整的文件。我们通过独占
+ *     锁文件尽量缩短此窗口，使同一时间只有一个进程升级；
+ *     其他进程直接继续，读取当前已有的状态。
+ *   - 超过 STALE_LOCK_MS 的陈旧锁（worker 崩溃、操作系统终止）
+ *     会被回收，避免遗漏的 unlink 永久禁用升级。
  *
- * Status stream: `runAutoUpgrade` emits each transition through `onStatus`
- * so the TUI can render a live "Checking… / Upgrading… / Upgraded, restart"
- * line in the header. The returned promise resolves once the final state
- * is reached.
+ * 状态流：`runAutoUpgrade` 通过 `onStatus` 发出每次状态转换，
+ * 让 TUI 可以在标题中实时渲染“检查中 / 升级中 / 已升级，请重启”
+ * 状态行。返回的 promise 在达到最终状态后
+ * 完成。
  */
 
-/** Env var users set to disable the auto-upgrade entirely. */
+/** 用户设置此环境变量可完全禁用自动升级。 */
 export const NO_AUTO_UPGRADE_ENV = "RELAY_PI_NO_AUTO_UPGRADE";
 /**
- * Opt-in for the upgrade machinery. Relay Pi is not published to npm, so the
- * probe stays off unless a future release (or a test) enables it explicitly.
+ * 显式启用升级机制。Relay Pi 尚未发布到 npm，因此
+ * 除非未来的发布版本（或测试）显式启用，否则探测保持关闭。
  */
 export const UPGRADE_ENABLED_ENV = "RELAY_PI_UPGRADE_ENABLED";
 
-/** A lock held longer than this is treated as abandoned and replaced. */
+/** 持有时间超过此值的锁会被视为已遗弃并替换。 */
 const STALE_LOCK_MS = DEFAULT_STALE_LOCK_MS;
 
-/** How long to wait on the registry. The TUI is already up and showing a
- *  "checking…" placeholder, so we can wait longer than the legacy inline
- *  notice without making the user feel the call. */
+/** 等待注册表的时长。TUI 已启动并显示
+ *  “检查中…”占位内容，因此可以比旧版内联通知等待更久，
+ *  而不会让用户感到调用延迟。 */
 const REGISTRY_TIMEOUT_MS = 8_000;
 
 /**
- * Live status stream emitted while the upgrade runs. Designed so the TUI
- * can render one line that mutates in place; each variant carries the
- * fields needed to phrase the line without re-deriving them.
+ * 升级运行期间发出的实时状态流。设计上让 TUI
+ * 可以渲染一条原地更新的状态行；每个变体都携带
+ * 组织该行文字所需的字段，无需重新推导。
  */
 export type UpgradeStatus =
   | { kind: "checking" }
@@ -85,11 +85,11 @@ export type UpgradeStatus =
         | "source-checkout"
         | "registry-unreachable"
         /**
-         * Another relay-pi process holds the cross-process open-lock on
-         * `~/.relay-pi/memory.db`. npm rewriting `node_modules` mid-flight
-         * while that peer is live is the documented trigger for the
-         * PGlite quarantine recovery path, so we skip the upgrade
-         * entirely and let the next solo-CLI launch perform it.
+         * 另一个 relay-pi 进程持有 `~/.relay-pi/memory.db`
+         * 的跨进程打开锁。已有记录表明，在该进程运行时
+         * 由 npm 改写 `node_modules` 会触发
+         * PGlite 隔离恢复路径，因此完全跳过升级，
+         * 留待下次仅有一个 CLI 启动时执行。
          */
         | "memory-in-use";
     };
@@ -97,16 +97,16 @@ export type UpgradeStatus =
 export type UpgradeStatusListener = (status: UpgradeStatus) => void;
 
 /**
- * A pub/sub handle the TUI subscribes to so it can render the live upgrade
- * line. `publish` is called once per intermediate status; `complete` is
- * called with the final status so late subscribers (e.g. the TUI mounting
- * after the upgrade already finished) still see the terminal state.
+ * TUI 订阅此发布/订阅句柄来渲染实时升级
+ * 状态行。每个中间状态都会调用一次 `publish`；最终状态通过
+ * `complete` 传入，让晚到的订阅者（例如升级已完成后
+ * 才挂载的 TUI）仍能看到终止状态。
  */
 export interface UpgradeStatusStream {
   subscribe(listener: UpgradeStatusListener): () => void;
   publish(status: UpgradeStatus): void;
   complete(final: UpgradeStatus): void;
-  /** Latest status emitted, or undefined before the first publish. */
+  /** 最近发出的状态，首次发布前为 undefined。 */
   current(): UpgradeStatus | undefined;
 }
 
@@ -119,15 +119,15 @@ export function createUpgradeStatusStream(): UpgradeStatusStream {
       try {
         listener(status);
       } catch {
-        // Listener errors must not break the upgrade flow.
+        // 监听器错误不得中断升级流程。
       }
     }
   };
   return {
     subscribe(listener) {
       listeners.add(listener);
-      // Replay the most recent status so late subscribers do not miss the
-      // current state — e.g. if the upgrade finished before the TUI mounted.
+      // 重放最近的状态，让晚到的订阅者不会错过
+      // 当前状态，例如升级在 TUI 挂载之前已完成。
       if (latest) listener(latest);
       return () => listeners.delete(listener);
     },
@@ -144,44 +144,44 @@ export function createUpgradeStatusStream(): UpgradeStatusStream {
 export interface RunAutoUpgradeInput {
   packageName: string;
   currentVersion: string;
-  /** Callback fired on every status transition. Never throws back into caller. */
+  /** 每次状态转换时触发的回调。不会向调用方抛出异常。 */
   onStatus?: UpgradeStatusListener;
-  /** Suppresses the run regardless of env (used after `--no-auto-upgrade`). */
+  /** 无论环境变量如何都禁止运行（用于 `--no-auto-upgrade` 之后）。 */
   disabled?: boolean;
-  /** process.argv[1] — used to detect source-checkout invocations. */
+  /** process.argv[1] — 用于检测从源码检出目录发起的调用。 */
   scriptPath?: string;
-  /** process.env at call site; lets tests inject a controlled environment. */
+  /** 调用处的 process.env；让测试能注入受控环境。 */
   env?: NodeJS.ProcessEnv;
-  /** Override for tests; defaults to fetchLatestPackageVersion. */
+  /** 测试用覆盖项；默认为 fetchLatestPackageVersion。 */
   fetchLatest?: (packageName: string) => Promise<string | undefined>;
-  /** Override for tests; defaults to spawning the real package manager. */
+  /** 测试用覆盖项；默认启动真实包管理器。 */
   runUpgrade?: (command: string[]) => Promise<{ ok: boolean; stderr?: string }>;
-  /** Override for tests. */
+  /** 测试用覆盖项。 */
   now?: () => number;
-  /** Override for tests. */
+  /** 测试用覆盖项。 */
   detectManager?: () => PackageManager;
   /**
-   * Path of the memory db data directory to probe before upgrading.
-   * When another live relay-pi process holds its open-lock, the upgrade is
-   * skipped with reason "memory-in-use". Defaults to
-   * `~/.relay-pi/memory.db`; tests inject a scratch dir.
+   * 升级前要探测的记忆数据库数据目录路径。
+   * 当另一个活跃的 relay-pi 进程持有其打开锁时，
+   * 以 "memory-in-use" 原因跳过升级。默认为
+   * `~/.relay-pi/memory.db`；测试会注入临时目录。
    */
   memoryDbPath?: string;
-  /** Override for tests; defaults to `peekOpenLockHolderPid`. */
+  /** 测试用覆盖项；默认为 `peekOpenLockHolderPid`。 */
   peekMemoryHolder?: typeof peekOpenLockHolderPid;
 }
 
 /**
- * Run the auto-upgrade flow in-process. Emits status transitions through
- * `onStatus` and resolves to the final status. Never throws — every error
- * path produces a terminal status the caller can render.
+ * 在进程内运行自动升级流程。通过 `onStatus` 发出状态转换，
+ * 并以最终状态完成。不会抛出异常，每条错误路径
+ * 都产生调用方可渲染的终止状态。
  */
 export async function runAutoUpgrade(input: RunAutoUpgradeInput): Promise<UpgradeStatus> {
   const emit = (status: UpgradeStatus): UpgradeStatus => {
     try {
       input.onStatus?.(status);
     } catch {
-      // Listener errors must never affect the upgrade flow.
+      // 监听器错误绝不能影响升级流程。
     }
     return status;
   };
@@ -198,13 +198,13 @@ export async function runAutoUpgrade(input: RunAutoUpgradeInput): Promise<Upgrad
     return emit({ kind: "skipped", reason: "source-checkout" });
   }
 
-  // Skip when another live relay-pi process is using the memory db. Running
-  // `npm install -g` against the package while a peer CLI has PGlite
-  // open is the documented trigger for the `memory.db.corrupted-*`
-  // recovery path (node_modules gets half-rewritten under the peer's
-  // feet, its next PGlite reopen sees a torn WASM, and the retry-then-
-  // quarantine fallback eventually fires). The next solo-CLI launch
-  // will pick the upgrade back up.
+  // 另一个活跃的 relay-pi 进程正在使用记忆数据库时跳过。已有记录表明，
+  // 在其他 CLI 打开 PGlite 时对该包执行 `npm install -g`
+  // 会触发 `memory.db.corrupted-*` 恢复路径
+  // （其他进程所依赖的 node_modules 被改写了一半，
+  // 下次重新打开 PGlite 时遇到不完整的 WASM，
+  // 最终触发先重试再隔离的后备机制）。下次仅有一个 CLI 启动时
+  // 会继续处理升级。
   const memoryDbPath = input.memoryDbPath ?? DEFAULT_MEMORY_DB_PATH;
   const peekMemoryHolder = input.peekMemoryHolder ?? peekOpenLockHolderPid;
   const memoryHolderPid = peekMemoryHolder(memoryDbPath);
@@ -224,15 +224,15 @@ export async function runAutoUpgrade(input: RunAutoUpgradeInput): Promise<Upgrad
     return emit({ kind: "locked" });
   }
   try {
-    // Self-heal partial installs from a previous run before we either probe
-    // the registry or spawn a fresh install. npm's global install finalizes
-    // with two renames — `agent` → `.agent-<rand>` (old aside), then
-    // `.agent-<rand>` (new tmp) → `agent`. A SIGKILL between them (e.g. a
-    // sandbox tearing down the exec process tree) leaves the scope dir with
-    // a leftover `.agent-*` directory and no `agent`, so the next install
-    // fails with `ENOTEMPTY` and `relay-pi` stays missing from $PATH. Sweep
-    // those stragglers while we hold the upgrade lock so concurrent CLIs do
-    // not race against us.
+    // 在探测注册表或启动新安装前，自行修复上次运行遗留的
+    // 不完整安装。npm 的全局安装最终通过两次重命名完成：
+    // `agent` → `.agent-<rand>`（移开旧版），然后
+    // `.agent-<rand>`（新版临时目录）→ `agent`。两者之间收到 SIGKILL（例如
+    // 沙箱拆除 exec 进程树）会在作用域目录中留下
+    // `.agent-*` 残余目录而没有 `agent`，导致下次安装
+    // 因 `ENOTEMPTY` 失败，且 $PATH 中始终找不到 `relay-pi`。持有
+    // 升级锁期间清理这些残余，避免并发 CLI 与我们
+    // 发生竞争。
     cleanStaleStagingDirs(scriptPath);
     emit({ kind: "checking" });
     const fetchLatest =
@@ -284,10 +284,10 @@ export async function runAutoUpgrade(input: RunAutoUpgradeInput): Promise<Upgrad
 }
 
 /**
- * Heuristic: only run auto-upgrade when the CLI looks like a globally
- * installed binary. Source-checkout runs (`bun src/cli.ts`) and per-project
- * installs are skipped so contributors never get their working copy
- * overwritten by `npm install --global`.
+ * 启发式判断：仅当 CLI 看起来是全局安装的
+ * 可执行文件时才运行自动升级。跳过从源码检出目录运行（`bun src/cli.ts`）
+ * 和项目内安装，确保贡献者的工作副本
+ * 不会被 `npm install --global` 覆盖。
  */
 export function isLikelyGlobalInstall(scriptPath: string): boolean {
   const normalized = scriptPath.replace(/\\/g, "/");
@@ -301,16 +301,16 @@ export function isLikelyGlobalInstall(scriptPath: string): boolean {
   ) {
     return true;
   }
-  // npm global installs live under `<prefix>/lib/node_modules/<pkg>/...`.
+  // npm 全局安装位于 `<prefix>/lib/node_modules/<pkg>/...` 下。
   if (/\/lib\/node_modules\//.test(normalized)) return true;
-  // Volta, fnm, nvm prefixes vary; treat the package under any node_modules as global.
+  // Volta、fnm、nvm 的前缀各异；将任意 node_modules 下的该包视为全局安装。
   if (normalized.includes("/node_modules/relay-pi/")) return true;
   return false;
 }
 
 /**
- * Human-readable one-liner for any UpgradeStatus. Used by both the JSON
- * stderr path and the TUI header so the wording stays consistent.
+ * 为任意 UpgradeStatus 生成供人阅读的单行描述。JSON 模式的
+ * stderr 路径和 TUI 标题共用它，以保持措辞一致。
  */
 export function describeUpgradeStatus(
   packageName: string,
@@ -328,13 +328,13 @@ export function describeUpgradeStatus(
     case "locked":
     case "current":
     case "skipped":
-      // No notice — either we are on latest, another process is handling it,
-      // or auto-upgrade is intentionally off. Header stays clean.
+      // 不显示通知：当前已是最新版本、另一进程正在处理，
+      // 或自动升级被有意关闭。保持标题简洁。
       return undefined;
   }
 }
 
-/** Resolved lazily so tests can swap $HOME per case. */
+/** 延迟解析，以便测试逐例替换 $HOME。 */
 function upgradePaths(): { homeDir: string; lockPath: string; logPath: string } {
   const homeDir = resolveRelayPiHome();
   return {
@@ -348,24 +348,24 @@ function ensureDir(path: string): void {
   try {
     mkdirSync(path, { recursive: true });
   } catch {
-    // ignore
+    // 忽略
   }
 }
 
 /**
- * Remove leftover `.agent-<rand>` staging directories that a previously
- * killed `npm install -g relay-pi` left behind in `node_modules`. Safe to
- * call repeatedly; missing entries are ignored. The directory is derived
- * from `scriptPath` by walking up to the `relay-pi` install segment that
- * `isLikelyGlobalInstall` already validated above.
+ * 删除先前被终止的 `npm install -g relay-pi`
+ * 在 `node_modules` 中留下的 `.agent-<rand>` 暂存目录。可安全地
+ * 重复调用；忽略不存在的条目。目录通过从 `scriptPath`
+ * 向上查找 `relay-pi` 安装路径段推导而来，
+ * 该路径段已由上面的 `isLikelyGlobalInstall` 验证。
  */
 function cleanStaleStagingDirs(scriptPath: string): void {
   const normalized = scriptPath.replace(/\\/g, "/");
   const marker = "/node_modules/relay-pi/";
   const idx = normalized.indexOf(marker);
   if (idx === -1) return;
-  // Use the original (non-normalized) path so Windows separators survive,
-  // even though relay-pi only ships on POSIX today.
+  // 使用原始（未规范化的）路径以保留 Windows 分隔符，
+  // 尽管 relay-pi 目前仅在 POSIX 上发布。
   const scopeDir = scriptPath.slice(0, idx + "/node_modules".length);
   let entries: string[];
   try {
@@ -391,7 +391,7 @@ function appendLog(line: string): void {
     ensureDir(join(logPath, ".."));
     appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
   } catch {
-    // ignore
+    // 忽略
   }
 }
 
@@ -401,11 +401,11 @@ function describeError(error: unknown): string {
 }
 
 /**
- * Base spawn options for the package manager upgrade. `detached: true` puts
- * npm in its own process group so a terminal Ctrl+C on the parent does not
- * propagate to the install. The full `stdio` array is composed at spawn
- * time because the stderr slot is a per-invocation file descriptor — see
- * `defaultRunUpgrade` for why a pipe would not be safe here.
+ * 包管理器升级的基本 spawn 选项。`detached: true` 将
+ * npm 放入独立进程组，使父进程终端中的 Ctrl+C 不会
+ * 传播到安装进程。完整的 `stdio` 数组在 spawn 时组装，
+ * 因为 stderr 槽位是每次调用各自的文件描述符；
+ * 此处不能安全使用管道的原因见 `defaultRunUpgrade`。
  */
 export const PACKAGE_MANAGER_SPAWN_OPTIONS: Pick<SpawnOptions, "detached"> = {
   detached: true,
@@ -414,30 +414,30 @@ export const PACKAGE_MANAGER_SPAWN_OPTIONS: Pick<SpawnOptions, "detached"> = {
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
 /**
- * Path to the file we redirect the package manager's stderr into. The path
- * is stable so the next `relay-pi` launch can surface a previous install
- * failure even though the writer was the prior process's detached child.
+ * 包管理器 stderr 重定向到的文件路径。路径
+ * 固定，因此下次启动 `relay-pi` 时能展示上次的安装
+ * 失败，即使写入者是上一个进程的分离子进程。
  */
 function upgradeStderrPath(): string {
   return join(upgradePaths().homeDir, "logs", "upgrade-stderr.log");
 }
 
 /**
- * Default in-process runner for the package manager upgrade command.
+ * 包管理器升级命令的默认进程内运行器。
  *
- * Survival contract (why this is not a `"pipe"`):
- *   The parent CLI is interactive and exits on Ctrl+C or `/exit`. If the
- *   child's stderr were a pipe owned by the parent, exiting closes the
- *   read end and npm's next stderr write trips SIGPIPE — killing the
- *   install mid-rename and leaving the global install directory with a
- *   `.agent-<rand>` staging dir but no `agent` (so `relay-pi` disappears from
- *   $PATH until the user reinstalls). Redirecting stderr to an inherited
- *   file fd has no reader to disconnect, so the install keeps writing
- *   after the parent is gone.
+ * 存活契约（为何不用 `"pipe"`）：
+ *   父 CLI 是交互式的，会在 Ctrl+C 或 `/exit` 时退出。如果
+ *   子进程的 stderr 是父进程拥有的管道，父进程退出会关闭
+ *   读取端，npm 下次写入 stderr 就会触发 SIGPIPE，
+ *   在重命名中途终止安装，导致全局安装目录中留下
+ *   `.agent-<rand>` 暂存目录却没有 `agent`（因而在用户重新安装前，
+ *   `relay-pi` 会从 $PATH 中消失）。将 stderr 重定向到继承的
+ *   文件描述符，就没有会断开的读取端，安装便能在
+ *   父进程退出后继续写入。
  *
- * We still want to report install errors in the `failed` status, so we
- * record the file's size before spawning and, on a non-zero exit, read the
- * tail written by this run.
+ * 我们仍希望在 `failed` 状态中报告安装错误，因此在启动前
+ * 记录文件大小，并在非零退出时读取
+ * 本次运行追加的尾部内容。
  */
 export function defaultRunUpgrade(
   command: string[],
@@ -451,27 +451,27 @@ export function defaultRunUpgrade(
     try {
       stderrStartByte = statSync(stderrPath).size;
     } catch {
-      // File does not exist yet; offset stays 0.
+      // 文件尚不存在；偏移量保持为 0。
     }
     try {
       stderrFd = openSync(stderrPath, "a");
     } catch (error) {
-      // If we cannot open the log file, fall back to discarding stderr so
-      // the install still survives the parent exit. The failure message
-      // will be generic but the upgrade itself completes.
+      // 若无法打开日志文件，则退回到丢弃 stderr，
+      // 确保安装在父进程退出后仍可继续。失败消息
+      // 会较为笼统，但升级本身能够完成。
       appendLog(`stderr-open-error path=${stderrPath} error=${describeError(error)}`);
     }
     const child = spawn(command[0]!, command.slice(1), {
       ...PACKAGE_MANAGER_SPAWN_OPTIONS,
       stdio: ["ignore", "ignore", stderrFd ?? "ignore"],
     });
-    // We passed our fd to the child; close the parent's copy so it does not
-    // pin the file open for the lifetime of this process.
+    // 已将文件描述符传给子进程；关闭父进程的副本，避免它
+    // 在本进程的整个生命周期内一直保持文件打开。
     if (stderrFd !== undefined) {
       try {
         closeSync(stderrFd);
       } catch {
-        // ignore
+        // 忽略
       }
     }
     child.unref();
@@ -489,8 +489,8 @@ export function defaultRunUpgrade(
 }
 
 /**
- * Read what this run appended to the shared stderr log. Capped so a long
- * npm trace does not bloat the failed-status line.
+ * 读取本次运行追加到共享 stderr 日志的内容。限制大小，避免
+ * 冗长的 npm 跟踪信息使失败状态行膨胀。
  */
 function readStderrTail(path: string, startByte: number): string | undefined {
   const MAX_BYTES = 4096;
@@ -509,7 +509,7 @@ function readStderrTail(path: string, startByte: number): string | undefined {
       try {
         closeSync(fd);
       } catch {
-        // ignore
+        // 忽略
       }
     }
   } catch {
@@ -517,7 +517,7 @@ function readStderrTail(path: string, startByte: number): string | undefined {
   }
 }
 
-// Test-only access to internal paths and constants.
+// 仅供测试访问内部路径和常量。
 export const __testing = {
   upgradePaths,
   STALE_LOCK_MS,

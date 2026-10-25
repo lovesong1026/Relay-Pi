@@ -8,7 +8,7 @@ import { shorthandForTransportModel } from "../model-resolution/catalog.js";
 import { isConnectedProviderId, type ConnectedProviderId } from "./store.js";
 import type { TransportFallbackCause } from "./fallback-notice.js";
 
-/** Classify only failures eligible for cross-transport fallback. */
+/** 仅对符合跨传输回退条件的故障分类。 */
 export function connectedFallbackCause(
   message: AgentMessage | undefined,
 ): TransportFallbackCause | undefined {
@@ -24,7 +24,7 @@ export function connectedFallbackCause(
   return "transport_error";
 }
 
-/** True when a connected failure must terminate because replay is no longer safe. */
+/** 当连接故障因重放已不安全而必须终止时为真。 */
 export function isPostOutputConnectedFailure(
   provider: string,
   message: AgentMessage | undefined,
@@ -37,7 +37,7 @@ export function isPostOutputConnectedFailure(
   );
 }
 
-/** Select the next transport after treating the failed connection as ineligible. */
+/** 将失败的连接视为不符合资格后，选择下一个传输。 */
 export function nextTransportAfterConnectedFailure(
   provider: ConnectedProviderId,
   modelId: string,

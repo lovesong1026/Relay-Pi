@@ -1,39 +1,34 @@
 /**
- * TUI playground.
+ * TUI 演示场。
  *
- * Renders the real TUI on top of a stub `SessionTurnRunner` so layout, colors,
- * and status-line composition can be verified without a live model. Each user
- * prompt drives a scripted scenario instead of hitting a provider:
+ * 在 stub `SessionTurnRunner` 上运行真实 TUI，因此无需实时模型即可验证布局、颜色
+ * 和状态行组合。每条用户提示词都会驱动一个脚本化场景，而不是请求 provider：
  *
- *   /working <secs>            stream a fake working turn that lasts ~secs
- *   /observe <secs>            same, but as an observational memory phase
- *   /queue <a,b,c>             emit a follow-up queue with the given prompts
- *   /queue+observe <secs>      run an observation phase with a non-empty queue
- *   /follow-up-demo            walk a three-prompt queue down to empty, replaying
- *                              each delivered entry as a `you:` block
- *   /tools <secs>              emit one fake tool-call running → completed
- *   /tools-demo                run a batch of formatters with verbose data
- *   /banner-demo               demo the sticky "latest user message" banner
- *   /ask                       emit an `ask` terminal with three questions
- *                              (single-select, multi-select, single-select).
- *                              Up/Down moves the highlight (and live-records
- *                              the answer for single-select). Space/Enter
- *                              advances on single-select, toggles a row on
- *                              multi-select, and advances when the synthetic
- *                              "Done" row is highlighted. ←/→ revisit prior
- *                              or upcoming questions. Typing a prompt
- *                              mid-flow flushes the latest answers via
- *                              `session.answer({ ..., message })`.
- *   /sleep <secs>              emit a `sleep` terminal that wakes in N seconds
- *   /error <message>           emit a system error and end the turn
- *   anything else              stream a short text reply and complete
+ *   /working <secs>            流式运行持续约 <secs> 的模拟工作回合
+ *   /observe <secs>            相同操作，但作为观察式记忆阶段
+ *   /queue <a,b,c>             发出包含给定提示词的后续队列
+ *   /queue+observe <secs>      运行带有非空队列的观察阶段
+ *   /follow-up-demo            将包含三个提示词的队列逐步清空，并把
+ *                              每个已交付条目重放为 `you:` 块
+ *   /tools <secs>              发出一个从运行到完成的模拟工具调用
+ *   /tools-demo                使用详细数据运行一批格式化器
+ *   /banner-demo               演示黏性的“最新用户消息”横幅
+ *   /ask                       发出包含三个问题的 `ask` terminal
+ *                              （单选、多选、单选）。按 Up/Down 移动高亮（并实时记录
+ *                              单选答案）。Space/Enter 在单选时前进，在多选时切换行，
+ *                              高亮模拟的“Done”行时前进。←/→ 可返回之前的问题
+ *                              或前往后续问题。流程中输入提示词会通过
+ *                              `session.answer({ ..., message })` 刷新最新答案。
+ *   /sleep <secs>              发出会在 N 秒后唤醒的 `sleep` terminal
+ *   /error <message>           发出系统错误并结束回合
+ *   其他内容                   流式输出一段简短文本并完成
  *
- * Run with:
+ * 运行方式：
  *   bun run examples/tui-playground.ts
  *
- * The optional first CLI arg is auto-submitted as the initial prompt, so:
+ * 可选的第一个 CLI 参数会作为初始提示词自动提交，例如：
  *   bun run examples/tui-playground.ts "/queue+observe 30"
- * lets you eyeball the combined status line right away.
+ * 这样可以立即观察组合后的状态行。
  */
 
 import { mkdtemp } from "node:fs/promises";
@@ -63,9 +58,8 @@ export const INITIAL_STATE: TurnState = {
   agent: { status: "running", messages: [] },
 };
 
-// Keep this list in sync with the runScenario branches below; rendered as the
-// first transcript block so users hitting `bun run examples/tui-playground.ts`
-// can discover scenarios without scrolling back to the file header.
+// 保持此列表与下方的 runScenario 分支同步；它会作为第一个 transcript 块渲染，
+// 让执行 `bun run examples/tui-playground.ts` 的用户无需滚回文件头即可发现各场景。
 export const PLAYGROUND_MENU = [
   "Playground scenarios (type any of these and press Enter):",
   "  /working <secs>            stream a fake working turn for ~secs",
@@ -123,9 +117,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
   }
 
   /**
-   * Stream a summary of the answers (and any flushed prompt) the TUI picker
-   * dispatched via `session.answer(...)`. Lets the playground exercise the
-   * picker handoff end-to-end without a real model.
+   * 流式输出 TUI 选择器通过 `session.answer(...)` 派发的答案（以及任何已刷新提示词）摘要。
+   * 让演示场景无需真实模型即可端到端演示选择器交接。
    */
   private async runAnswerScenario(
     command: Extract<TurnCommand, { type: "answer" }>,
@@ -162,9 +155,9 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
   }
 
   compact(): void {
-    // The playground transcript is synthesized, not a real model session, so
-    // compact is a no-op here. The SessionTurnRunner interface still has to
-    // be implemented because it's shared with production.
+    // 演示场景的 transcript 是合成的，不是真实模型会话，因此这里的
+    // compact 不执行任何操作。不过仍需实现 SessionTurnRunner 接口，
+    // 因为它与生产实现共享。
   }
 
   getState(): TurnState | undefined {
@@ -195,10 +188,9 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
   async dispose(): Promise<void> {}
 
   /**
-   * Emit a synthetic `ask` terminal so tests / playground extensions can
-   * push the picker into a known state without routing through the slash
-   * scenario layer. Mirrors what the `/ask` scenario produces, but lets
-   * the caller hand-craft the questions list.
+   * 发出一个合成的 `ask` terminal，让测试或演示扩展无需经过 slash 场景层，
+   * 就能把选择器推入已知状态。它模拟 `/ask` 场景的结果，但允许调用方
+   * 手动构造问题列表。
    */
   emitAskTerminal(questions: TurnQuestion[]): void {
     const terminal: TurnTerminalEvent = {
@@ -210,26 +202,24 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
     this.emit(terminal);
   }
 
-  /** Emit `usage` for tests that need explicit segment totals. */
+  /** 为需要明确分段总数的测试发出 `usage`。 */
   emitUsage(event: Omit<TurnUsageEvent, "type">): void {
     this.emit({ type: "usage", ...event });
   }
 
   /**
-   * Push a hand-crafted event through the same fan-out the scenario engine
-   * uses. Tests rely on this to drive isolated step / memory / usage flows
-   * without paying the latency of a full scripted scenario.
+   * 通过场景引擎使用的同一广播路径推送手工构造的事件。
+   * 测试依靠它驱动独立的 step / memory / usage 流程，避免承担完整脚本场景的延迟。
    */
   emitEvent(event: TurnEvent): void {
     this.emit(event);
   }
 
-  // ---- scenario plumbing ---------------------------------------------------
+  // ---- 场景管线 -------------------------------------------------------------
 
   private emit(event: TurnEvent): void {
-    // Keep the snapshot returned by getState() consistent with the queue
-    // events we emit, mirroring the production runner so consumers that read
-    // state.followUpQueue (e.g. the Ctrl+C pop handler) see the live queue.
+    // 保持 getState() 返回的快照与我们发出的队列事件一致，模拟生产运行器，
+    // 这样读取 state.followUpQueue 的消费者（例如 Ctrl+C 弹出处理器）能看到实时队列。
     if (event.type === "follow_up_queue") {
       this.state = { ...this.state, followUpQueue: [...event.followUpQueue] };
     } else if (event.type === "task_started") {
@@ -581,9 +571,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
             },
           ],
         },
-        // Live formatter hides ask_user_question (the runner emits an `ask`
-        // terminal event for the picker). Included here mostly to document
-        // that path; the demo falls through with no transcript entry.
+        // 实时格式化器会隐藏 ask_user_question（运行器会为选择器发出 `ask`
+        // terminal 事件）。这里主要用于记录这条路径；演示会直接跳过，不写入 transcript。
       },
       {
         toolName: "create_state_machine_definition",
@@ -630,8 +619,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
           },
           firstState: "verify",
         },
-        // create_state_machine_definition echoes the full definition back; the
-        // formatter suppresses it because the roster body covers the same data.
+        // create_state_machine_definition 会回显完整定义；格式化器会将其抑制，
+        // 因为 roster 正文已经包含相同数据。
         output: JSON.stringify({ type: "create_state_machine_definition", ok: true }, null, 2),
       },
       {
@@ -699,8 +688,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
       },
     ];
 
-    // Reasoning block: stream 6 deltas then finalize with the full text so
-    // the 3-line cap on reasoning (label + up to 2 body lines) is visible.
+    // 推理块：流式发送 6 个增量，随后用完整文本结束，这样能看到推理内容
+    // 的 3 行上限（标签 + 最多 2 行正文）。
     const reasoningLines = [
       "Considering whether to clamp the reasoning body to 3 visual lines.",
       "The streaming path needs the same cap as the finalized path.",
@@ -717,9 +706,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
     this.emit({ type: "step", step: { type: "reasoning", text: reasoningLines.join("\n") } });
     await this.sleep(200);
 
-    // Memory observation completion: payload includes observations and a
-    // usage-bumped list so the rendered body exercises the message-only path
-    // (observation text is intentionally omitted from the transcript).
+    // 观察式记忆完成：载荷包含 observations 和 usage-bumped 列表，
+    // 以便渲染正文覆盖仅消息路径（观察文本会有意从 transcript 中省略）。
     this.emit({
       type: "memory",
       phase: "observation",
@@ -788,9 +776,8 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
       if (this.interrupted) return undefined;
     }
 
-    // Cap the demo with an `ask` terminal so the question UI is exercised
-    // even though `ask_user_question` hides itself live (the runner owns the
-    // picker via this terminal event).
+    // 用 `ask` terminal 收尾演示，这样问题 UI 也会被演示，
+    // 即使 ask_user_question 在实时运行中会隐藏自身（运行器通过该 terminal 事件负责选择器）。
     return {
       type: "ask",
       state: { ...this.state, status: "waiting_for_human" },
@@ -808,16 +795,12 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
   }
 
   /**
-   * Walk a three-entry follow-up queue all the way down to empty, pausing
-   * between deliveries so the user can watch the lifecycle play out:
+   * 将包含三个条目的后续队列逐步清空，中间暂停，让用户观察完整生命周期：
    *
-   *   1. Initial emit populates the panel above the compose bar with all
-   *      three prompts; nothing is in the transcript yet.
-   *   2. Each subsequent emit drops the front entry — the session
-   *      subscription diffs the queues and replays the delivered prompt as
-   *      a real `you:` block in the transcript, while the panel shrinks.
-   *   3. The final empty emit drains the last entry, hiding the panel and
-   *      leaving three `you:` blocks behind in the transcript.
+   *   1. 初次发出事件时，compose bar 上方的面板会填入三个提示词；transcript 还为空。
+   *   2. 后续每次发出事件都会移除队首条目——session 订阅会比较队列，
+   *      将已交付提示词作为真实 `you:` 块重放到 transcript，同时缩小面板。
+   *   3. 最后一次空队列事件会清空末尾条目、隐藏面板，并在 transcript 中留下三个 `you:` 块。
    */
   private async runFollowUpDemo(): Promise<TurnTerminalEvent> {
     const prompts = [
@@ -839,12 +822,10 @@ export class FakePlaygroundRunner implements SessionTurnRunner {
   }
 
   /**
-   * Walk the user through the sticky "latest user message" banner that
-   * appears above the transcript only when the most recent `you:` block
-   * has scrolled out of the viewport. This scenario streams a long-ish
-   * agent reply so the user's `/banner-demo` block visibly scrolls off
-   * the top, which is the exact condition that reveals the banner; the
-   * narration also points them at the other ways to trigger it.
+   * 引导用户观察黏性的“最新用户消息”横幅：只有最近的 `you:` 块滚出视口后，
+   * 横幅才会出现在 transcript 上方。该场景会流式输出较长的 Agent 回复，
+   * 让用户的 `/banner-demo` 块明显滚出顶部；这正是横幅出现的条件，旁白也会
+   * 提示其他触发方式。
    */
   private async runBannerDemo(): Promise<TurnTerminalEvent> {
     const lines = [

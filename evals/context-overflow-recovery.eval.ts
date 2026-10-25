@@ -9,21 +9,9 @@ import { testIfDocker } from "../test/helpers/docker-only.js";
 const model = process.env.EVAL_MODEL ?? "haiku-4.5";
 
 /**
- * Live test for the runner's provider-overflow recovery branch in
- * `runAgentWorker`. In production, wire-shaping evicts preemptively
- * whenever its byte-based estimate trips, so the provider rejection
- * path is reached only when the local estimate underestimates the
- * real provider tokenizer (heavy tool/thinking blocks, structured
- * payloads, etc.). To exercise the same code path deterministically
- * the eval swaps the memory transform for one that *only* applies the
- * sticky horizon — no preemptive trigger — so the first attempt
- * dispatches the full seeded history and the second attempt sees the
- * halved list the recovery branch produced.
+ * 针对 runner 在 `runAgentWorker` 中 provider-overflow recovery 分支的 live test。生产环境中，wire-shaping 会在基于字节的估算触发时预先 eviction，因此只有本地估算低估了真实 provider tokenizer（大量 tool/thinking block、结构化 payload 等）时才会走 provider rejection 路径。为确定性地执行同一代码路径，该 eval 将 memory transform 替换为只应用 sticky horizon 的版本——不触发预先 trim——因此第一次尝试会派发完整的 seeded history，第二次尝试会看到 recovery 分支生成的减半列表。
  *
- * Everything else (the model, the gateway, the
- * `isContextOverflow` detection, `agent.continue()`, system event
- * emission) runs live so a regression in any of those layers would
- * surface here.
+ * 其他部分（model、gateway、`isContextOverflow` detection、`agent.continue()`、system event emission）都实时运行，因此其中任何 layer 回归都会在这里暴露。
  */
 class ProviderOverflowEvalRunner extends TurnRunner {
   getEvictionHorizon(): number {
@@ -46,11 +34,7 @@ describe("provider context-overflow recovery", () => {
         skillDiscovery: { includeDefaults: false },
       });
 
-      // Seed the parent agent's transcript with enough prior turns to
-      // blow past the model's hard context window on the first send.
-      // Passing `state` to `start` is the protocol-level way to resume
-      // from prior history, so the live agent transcript starts at the
-      // size we constructed without a separate ingest step.
+      // 为 parent agent 的 transcript seed 足够多的 prior turn，使第一次发送超过 model 的硬 context window。将 `state` 传给 `start` 是协议层面的 resume 方式，因此 live agent transcript 会直接从我们构造的大小开始，不需要单独的 ingest 步骤。
       await runner.start({
         type: "start",
         state: {
@@ -73,8 +57,7 @@ describe("provider context-overflow recovery", () => {
       expect(terminal.status).toBe("completed");
       expect(terminal.result?.toLowerCase()).toContain("recovered");
 
-      // The recovery branch advanced the sticky horizon past at least
-      // one observable message — that is what made the retry fit.
+      // recovery 分支将 sticky horizon 推进到至少一个可观察 message 之后——正是这一点让 retry 能够适配。
       expect(runner.getEvictionHorizon()).toBeGreaterThan(0);
 
       const recoveryNotices = events.filter(
@@ -90,18 +73,10 @@ describe("provider context-overflow recovery", () => {
 });
 
 /**
- * Build a synthetic prior-turn transcript whose total wire size reliably
- * pushes the first send past a 200k-token context window. Repeated
- * "lorem ipsum" is highly tokenizer-compressible, so we oversize the raw
- * bytes well beyond a naive chars/token estimate to ensure the provider
- * actually rejects the first attempt — that rejection is what triggers
- * the recovery branch under test. After the recovery branch advances
- * the sticky horizon past the older half, the remaining transcript fits.
+ * 构造一个 synthetic prior-turn transcript，其总 wire size 能稳定地让第一次发送超过 200k-token context window。重复的 "lorem ipsum" 很容易被 tokenizer 压缩，因此将原始字节扩大到远超朴素 chars/token 估算，以确保 provider 确实拒绝第一次尝试——该拒绝正是要测试的 recovery 分支触发条件。recovery 分支将 sticky horizon 推过较旧的一半后，剩余 transcript 应能适配。
  */
 function buildOversizedHistory(): AgentMessage[] {
-  // ~14 KB per message * 100 messages = ~1.4 MB total raw text. Sized so
-  // the full transcript overflows haiku-4.5's window but the halved
-  // transcript the recovery branch produces fits.
+  // 每条 message 约 14 KB * 100 条 = 原始文本约 1.4 MB。大小经过设计，使完整 transcript 超过 haiku-4.5 的 window，而 recovery 分支生成的减半 transcript 可以适配。
   const filler = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(250);
   const messages: AgentMessage[] = [];
   for (let pair = 0; pair < 50; pair++) {

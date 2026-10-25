@@ -1,7 +1,7 @@
 /**
- * Basic example: using the runner programmatically.
+ * 使用运行器编程调用的基础示例。
  *
- * This runs a single agent turn and logs streamed runner events.
+ * 运行单轮 Agent 回合，并记录流式运行器事件。
  */
 
 import { TurnRunner, type TurnRunnerConfig } from "../src/index.js";

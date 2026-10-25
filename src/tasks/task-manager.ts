@@ -12,52 +12,52 @@ import type {
 
 const MAX_SCOPE_DEPTH = 2;
 
-/** Runtime hooks available to an in-process task executor. */
+/** 进程内任务执行器可用的运行时钩子。 */
 export interface TaskExecutionContext {
-  /** Stable identity allocated before this executor starts. */
+  /** 在此执行器启动前分配的稳定标识。 */
   taskId: TaskId;
-  /** Aborted exactly once by task_stop, interrupt, or scope closure. */
+  /** 由 task_stop、中断或作用域关闭恰好中止一次。 */
   signal: AbortSignal;
-  /** Append an ordered chunk to the task's retained output. */
+  /** 将有序块追加到任务保留的输出中。 */
   onOutput(chunk: string): void;
-  /** Read the caller's reason when classifying an abort outcome. */
+  /** 对中止结果分类时读取调用方的原因。 */
   stopReason(): TaskStopReason | undefined;
 }
 
 interface TaskOwnership {
-  /** Scope that owns the task and is responsible for closing it. */
+  /** 拥有任务并负责关闭任务的作用域。 */
   ownerScopeId: ScopeId;
-  /** Parent of a newly encountered scope; omitted only for a root scope. */
+  /** 新遇到的作用域的父作用域；仅根作用域省略。 */
   parentScopeId?: ScopeId;
 }
 
-/** Specification for work that begins executing immediately. */
+/** 立即开始执行的工作规范。 */
 export interface InProcessTaskSpec<T = unknown> extends TaskOwnership {
-  /** Selects the executor family for listings and downstream presentation. */
+  /** 选择用于列表和下游展示的执行器类别。 */
   kind: "tool" | "subagent";
-  /** Stable machine-facing name for the operation. */
+  /** 操作的稳定机器可读名称。 */
   name: string;
-  /** Human-facing description of this invocation. */
+  /** 此次调用的面向用户描述。 */
   label: string;
-  /** Run the task; rejection is observed and converted into a failed settlement. */
+  /** 运行任务；拒绝会被观察并转换为失败结算。 */
   execute(context: TaskExecutionContext): Promise<T>;
 }
 
-/** Specification for durable wall-clock work with no in-process executor. */
+/** 无进程内执行器的持久化实际时间工作规范。 */
 export interface ScheduledTaskSpec extends TaskOwnership {
-  /** Marks the task as durable wall-clock work rather than an active process. */
+  /** 将任务标记为持久化实际时间工作，而非活动进程。 */
   kind: "scheduled";
-  /** Stable machine-facing name for the scheduled operation. */
+  /** 定时操作的稳定机器可读名称。 */
   name: string;
-  /** Human-facing description of what will resume. */
+  /** 将要恢复的内容的面向用户描述。 */
   label: string;
-  /** Unix-epoch timestamp used by the quiescence decider. */
+  /** 静止状态决策器使用的 Unix 纪元时间戳。 */
   wakeAt: number;
 }
 
 export type TaskSpec<T = unknown> = InProcessTaskSpec<T> | ScheduledTaskSpec;
 
-/** Opaque start result used to race only the task selected for foreground delivery. */
+/** 不透明的启动结果，用于仅对选定前台交付的任务进行竞速。 */
 export interface TaskHandle {
   readonly id: TaskId;
 }
@@ -69,51 +69,51 @@ export type ForegroundRaceResult =
 export type TaskReaper = (reason: TaskStopReason) => void | Promise<void>;
 
 export interface TaskManagerOptions {
-  /** Injected owner of time and timers, allowing lifecycle races without real sleeps. */
+  /** 注入的时间与定时器所有者，允许无需实际休眠即可执行生命周期竞速。 */
   clock: RuntimeClock;
-  /** Receives ordered lifecycle changes without owning settlement delivery. */
+  /** 接收有序生命周期变化，但不拥有结算交付。 */
   onEvent?: (event: TaskEvent) => void;
 }
 
 export interface RecoverResult {
-  /** Previously running tasks that cannot exist in this process and were marked lost. */
+  /** 先前运行中但无法存在于本进程、已标记为 lost 的任务。 */
   lost: readonly TaskDescriptor[];
 }
 
 export interface TaskManager {
-  /** Register a child scope before work begins so depth is rejected at the executor boundary. */
+  /** 在工作开始前注册子作用域，以便在执行器边界拒绝超出深度限制的情况。 */
   openScope(scopeId: ScopeId, parentScopeId?: ScopeId): void;
-  /** Allocate an id and either spawn in-process work or record a schedule. */
+  /** 分配 id，并创建进程内工作或记录计划。 */
   start<T>(spec: TaskSpec<T>): TaskHandle;
-  /** Wait through a foreground budget without aborting on expiry. */
+  /** 在前台预算内等待，到期时不中止任务。 */
   raceForeground(handle: TaskHandle, budgetMs: number): Promise<ForegroundRaceResult>;
-  /** Return descriptor copies, optionally restricted to their exact owner scope. */
+  /** 返回描述符副本，可选地限制为其确切所属作用域。 */
   list(scopeId?: string): readonly TaskDescriptor[];
-  /** Inspect retained output and terminal values without consuming settlement delivery. */
+  /** 检查保留的输出和终止值，不消费结算交付。 */
   output(id: TaskId): TaskSnapshot | undefined;
-  /** Observe a task or the next task settling, optionally bounded by a clock-driven wait. */
+  /** 观察某个任务或下一个任务结算，可选地以时钟驱动的等待限制时长。 */
   waitForSettlement(id?: TaskId, waitMs?: number): Promise<TaskSnapshot | undefined>;
-  /** Pull the oldest undelivered settlement; this is the only consuming operation. */
+  /** 取出最早的未交付结算；这是唯一会消费结算的操作。 */
   nextSettled(): TaskSettlement | undefined;
-  /** Abort a task once and resolve only after its executor has fully unwound. */
+  /** 中止任务一次，仅在其执行器完全退出后才解析。 */
   stop(id: TaskId, reason: TaskStopReason): Promise<TaskSnapshot | undefined>;
-  /** Stop descendant scopes before directly owned tasks and await every unwind. */
+  /** 先停止后代作用域，再停止直接拥有的任务，并等待每次退出完成。 */
   closeScope(scopeId: ScopeId, reason: TaskStopReason): Promise<void>;
-  /** Abort all active and scheduled work, reap processes, and await full unwind. */
+  /** 中止所有活动和定时工作，回收进程，并等待完全退出。 */
   interruptAll(reason: TaskStopReason): Promise<void>;
-  /** Compute the current quiescence posture from task descriptors. */
+  /** 根据任务描述符计算当前静止状态。 */
   pendingWork(): PendingWork;
-  /** Hydrate descriptors, converting process-bound running work to lost settlements. */
+  /** 加载描述符，将依赖旧进程的运行中工作转换为 lost 结算。 */
   recover(
     descriptors: readonly TaskDescriptor[],
     nextTaskId?: number,
     outputTails?: Readonly<Partial<Record<TaskId, readonly string[]>>>,
   ): RecoverResult;
-  /** Return the numeric suffix that the next start() call will allocate. */
+  /** 返回下次 start() 调用将分配的数字后缀。 */
   nextTaskId(): number;
-  /** Register process cleanup to run once at the next reap boundary. */
+  /** 注册在下次回收边界执行一次的进程清理。 */
   registerReaper(reaper: TaskReaper): () => void;
-  /** Invoke and drain all currently registered process cleanup callbacks. */
+  /** 调用并清空当前注册的所有进程清理回调。 */
   reapAll(reason: TaskStopReason): Promise<void>;
 }
 
@@ -134,7 +134,7 @@ interface ScopeRecord {
   closed: boolean;
 }
 
-/** Create the single owner of task lifecycle and settlement delivery. */
+/** 创建任务生命周期和结算交付的唯一所有者。 */
 export function createTaskManager(options: TaskManagerOptions): TaskManager {
   const records = new Map<TaskId, TaskRecord>();
   const scopes = new Map<string, ScopeRecord>();
@@ -258,7 +258,7 @@ export function createTaskManager(options: TaskManagerOptions): TaskManager {
         }),
       );
 
-      // Attach both branches synchronously: executor rejection is always observed at spawn.
+      // 同步附加两个分支：创建执行器时始终观察其拒绝。
       void execution.then(
         (result) => {
           if (record.stopReason !== undefined) {
@@ -303,7 +303,7 @@ export function createTaskManager(options: TaskManagerOptions): TaskManager {
       await Promise.race([record.finished, budgetElapsed]);
       cancelBudget();
 
-      // A completion queued at the exact deadline wins the photo finish.
+      // 恰好在截止时间排队的完成结果在这场同时到达的竞速中获胜。
       await Promise.resolve();
       if (record.settlement) return { kind: "settled", settlement: record.settlement };
       return { kind: "still_running", task: snapshot(record) };

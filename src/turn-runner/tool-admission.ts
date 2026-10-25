@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Compile } from "typebox/compile";
 
-/** Validate before the SDK can coerce arguments or include their values in errors. */
+/** 在 SDK 强制转换参数或将参数值包含进错误之前进行验证。 */
 const admittedTools = new WeakMap<AgentTool, AgentTool>();
 
 export function admitToolArguments(tool: AgentTool): AgentTool {
@@ -26,8 +26,8 @@ export function admitToolArguments(tool: AgentTool): AgentTool {
   const admitted: AgentTool = {
     ...tool,
     prepareArguments: (value) => {
-      // A tool's explicit input adapter is part of its public contract (e.g.
-      // edit accepts a single replacement). Only generic SDK coercion is excluded.
+      // 工具的显式输入适配器属于其公共契约的一部分（例如
+      // edit 接受单项替换）。只排除 SDK 的通用强制转换。
       return validate(prepare ? prepare(value) : value);
     },
   };

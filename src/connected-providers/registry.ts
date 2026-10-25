@@ -4,29 +4,29 @@ import { fakeConnectedProvider } from "./fake-issuer.js";
 import type { ConnectedProviderId } from "./store.js";
 
 export interface ConnectedProviderEntry {
-  /** Stable transport id used by pi-ai and the credential store. */
+  /** pi-ai 和凭据存储使用的稳定传输 id。 */
   id: ConnectedProviderId;
-  /** User-facing subscription name. */
+  /** 面向用户的订阅名称。 */
   label: string;
-  /** Short CLI value accepted by `relay-pi connect`. */
+  /** `relay-pi connect` 接受的简短 CLI 值。 */
   alias: string;
-  /** Login modes this provider can run; only device code is valid in a VM. */
+  /** 此 provider 可运行的登录模式；VM 中仅设备码有效。 */
   loginModes: readonly ("device_code" | "browser")[];
-  /** Resolve the active pi-ai implementation, including an env-gated fake issuer. */
+  /** 解析当前启用的 pi-ai 实现，包括由环境变量控制的模拟签发方。 */
   oauth(): OAuthAuth;
   /**
-   * The whole pi-ai provider. Model availability now hangs off the provider
-   * (`filterModels`) rather than the OAuth implementation, so a caller that
-   * asks "which models does this account get" needs this, not just `oauth()`.
+   * 完整的 pi-ai provider。模型可用性现在由 provider
+   * （`filterModels`）而非 OAuth 实现负责，因此调用方要
+   * 查询“此账户可用哪些模型”时需要它，而不只是 `oauth()`。
    */
   provider(): Provider;
 }
 
 /**
- * An OAuth implementation hangs off the model provider that uses it, so it is
- * read from the built-in provider list rather than looked up by id. That makes
- * this the single seam a configured fake issuer substitutes at, in view of
- * every caller that goes through the registry.
+ * OAuth 实现挂在使用它的模型 provider 上，因此从
+ * 内置 provider 列表中读取，而不是按 id 查找。这使得
+ * 此处成为配置的模拟签发方的唯一替换点，所有通过注册表的
+ * 调用方都能看到这一替换。
  */
 function piProvider(id: ConnectedProviderId): Provider {
   const provider =

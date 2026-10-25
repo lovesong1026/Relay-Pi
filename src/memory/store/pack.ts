@@ -2,30 +2,29 @@ import { estimateTokens } from "../observational.js";
 import { mergeListings } from "./sources.js";
 import { listStoreTolerant, type StoredMemory } from "./store.js";
 
-/** Standalone ceiling for curated file memory pinned into an agent prompt. */
+/** 固定注入 Agent prompt 的精选文件 memory 独立上限。 */
 export const PINNED_STORE_TOKEN_BUDGET = 15_000;
 
 export interface LoadPinnedStorePackOptions {
-  /** Store directories in collision precedence order, nearest first. */
+  /** 按 collision precedence 排列的 store 目录，最近的在前。 */
   stores: readonly string[];
-  /** Independent ceiling for file-backed content; defaults to 15,000 tokens. */
+  /** file-backed 内容的独立上限，默认为 15,000 token。 */
   tokenBudget?: number;
 }
 
 export interface PinnedStorePack {
-  /** Newest-first entries retained after collision resolution and budget fitting. */
+  /** collision resolution 和预算适配后保留的、从新到旧的条目。 */
   entries: StoredMemory[];
-  /** Number of complete older entries removed to satisfy the cap. */
+  /** 为满足上限而移除的完整旧条目数量。 */
   dropped: number;
 }
 
 /**
- * Load a frozen, newest-first view of curated file memories.
+ * 加载精选文件 memory 的冻结、从新到旧视图。
  *
- * Malformed entries are isolated to their own file and warned about instead
- * of making agent startup fail. When the complete set exceeds the independent
- * cap, whole entries leave oldest-first; the newest entry is retained and
- * deterministically tail-truncated when it alone is too large.
+ * 格式错误的条目隔离在自己的文件中并发出警告，而不会让 Agent 启动失败。完整集合超过
+ * 独立上限时，从最旧开始移除完整条目；保留最新条目，如果它单独就过大，则确定性地从
+ * 尾部截断。
  */
 export async function loadPinnedStorePack(
   options: LoadPinnedStorePackOptions,

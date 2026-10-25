@@ -14,13 +14,10 @@ import { INTERRUPTED_STATE_MACHINE_STATE as INTERRUPTED_STATE } from "../types/s
 import type { StateMachineRunnerDecision } from "./tools.js";
 
 /**
- * Hard cap on retained `StateMachineSession.history` entries. Long-lived
- * relays (poll loops, follow-up cadences) can otherwise grow history
- * unboundedly, which bloats every emitted `state_machine` event payload
- * and every persisted session snapshot. The cap keeps the most recent
- * transitions — what UIs and debuggers actually look at — and drops
- * the oldest. The starting `state_machine_started` marker can fall off
- * with the rest; consumers must not rely on its presence.
+ * 保留的 `StateMachineSession.history` 条目的硬上限。长期 relay（poll 循环、follow-up 节奏）
+ * 否则可能无限增长，使每个发出的 `state_machine` 事件 payload 和每个持久化 Session 快照
+ * 都变得臃肿。上限保留最近的转换——这正是 UI 和 debugger 实际查看的内容——并丢弃最旧的。
+ * 开始时的 `state_machine_started` 标记也可能随其他内容一起被淘汰；消费者不得依赖它存在。
  */
 export const STATE_MACHINE_HISTORY_LIMIT = 100;
 
@@ -74,7 +71,7 @@ export function isWaitingOnScheduledState(stateMachine: StateMachineSession | un
   return Boolean(currentScheduledState(stateMachine) && !stateMachine?.terminal);
 }
 
-/** The active inert park, if the machine currently holds without execution or a wake. */
+/** 如果 machine 当前保持在不执行工作且没有唤醒的 active inert park，则返回它。 */
 export function currentParkState(
   stateMachine: StateMachineSession | undefined,
 ): StateMachineParkState | undefined {
@@ -99,12 +96,10 @@ export function recordRunnerDecision(
 }
 
 /**
- * Replace one state in the active definition with a merged version,
- * recording a state_definition_updated event so the persistence is
- * visible in session history. Callers should pass the already-merged
- * state (typically produced by `applyStateOverride`). The session's
- * `definition.states` array is rebuilt immutably; any other reference to
- * the previous definition object is unaffected.
+ * 用合并后的版本替换 active definition 中的一个 state，并记录 state_definition_updated 事件，
+ * 使持久化在 Session 历史中可见。调用方应传入已经合并好的 state（通常由
+ * `applyStateOverride` 产生）。`definition.states` 数组会以不可变方式重建；对之前 definition
+ * 对象的其他引用不受影响。
  */
 export function persistStateDefinition(
   stateMachine: StateMachineSession,
@@ -204,27 +199,21 @@ export function recordStateSleep(
 }
 
 /**
- * Threshold for the misconfigured poll-gate heuristic: how many back-to-back
- * successful completions of the same poll state — with no other state running
- * in between — we treat as a runaway always-succeeds poll rather than
- * legitimate fast polling. Kept small but >1 so a poll that genuinely
- * completes once and is re-selected once does not trip the guard.
+ * 错误配置 poll-gate 启发式的阈值：同一 poll state 在中间没有其他 state 运行时连续成功完成多少次，
+ * 才会被视为失控的“始终成功” poll，而不是合法的快速轮询。数值保持较小但大于 1，因此真正
+ * 完成一次并再次被选择一次的 poll 不会触发保护。
  */
 export const MISCONFIGURED_POLL_GATE_THRESHOLD = 3;
 
 /**
- * Count how many times in a row the given poll state has already completed
- * successfully with no *other* state running in between.
+ * 统计指定 poll state 在中间没有运行其他 state 的情况下，已经连续成功完成了多少次。
  *
- * Why this shape catches the footgun without false positives: a healthy poll
- * either exits non-success — which records a sleep in `progress`, never a
- * `state_completed` in `history`, so it cannot inflate this count — or it
- * eventually drives the machine into a different state, whose event breaks the
- * streak. The only way to accumulate consecutive same-poll completions is an
- * always-exit-0 command (e.g. `echo waiting for review`) being re-selected as
- * the same gate, which is exactly the hot-loop we want to surface. The
- * current in-flight success is not yet recorded when the turn loop calls
- * this, so the returned count reflects only prior completions.
+ * 为什么这种形状能在不产生误报的情况下捕获陷阱：健康的 poll 要么以非成功退出——这会在
+ * `progress` 中记录 sleep，而不是在 `history` 中记录 `state_completed`，因此不会增加计数——
+ * 要么最终将 machine 推进到另一个 state，其事件会打断连续序列。唯一能累积相同 poll 连续完成的
+ * 方式，是一个始终退出 0 的命令（例如 `echo waiting for review`）被重新选择为同一个 gate，
+ * 这正是我们要暴露的热循环。回合循环调用此函数时当前正在进行的成功尚未记录，因此返回的计数
+ * 只反映之前的完成次数。
  */
 export function consecutivePollGateSuccesses(
   stateMachine: StateMachineSession,
@@ -238,9 +227,8 @@ export function consecutivePollGateSuccesses(
       streak++;
       continue;
     }
-    // Events naming this same poll (its own selection/run cycle) are noise
-    // between two of its completions; an event naming a *different* state
-    // means the machine actually moved on, so the streak is over.
+    // 命名同一 poll 的事件（它自身的选择/运行循环）只是两次完成之间的噪声；命名不同 state 的事件
+    // 表明 machine 确实向前移动，因此连续序列结束。
     if (
       (event.type === "state_started" ||
         event.type === "state_failed" ||
@@ -254,7 +242,7 @@ export function consecutivePollGateSuccesses(
   return streak;
 }
 
-/** Only retained, settled executions are comparable; older and unstarted work is unknown. */
+/** 只有仍保留且已结束的 execution 才可比较；较旧或尚未开始的工作属于未知。 */
 function* settledStateExecutions(
   session: StateMachineSession,
   state: string,
@@ -281,7 +269,7 @@ function* settledStateExecutions(
   }
 }
 
-/** Compare the latest settled attempt for this state, never a stale matching attempt behind changed work. */
+/** 比较该 state 最近一次已结束的尝试，绝不使用变更工作之后的过时匹配尝试。 */
 export function annotateUnchangedExecution(
   session: StateMachineSession,
   execution: StateMachineExecutionReceipt,
@@ -294,7 +282,7 @@ export function annotateUnchangedExecution(
 
 export const REPEATED_SELECTION_LOOP_THRESHOLD = 3;
 
-/** Same effective agent/script work repeated while its settled evidence remains retained. */
+/** 当相同的有效 agent/script 工作仍有已结束证据保留时，统计其重复次数。 */
 export function repeatedSelectionLoopCount(
   session: StateMachineSession,
   stateName: string,
@@ -388,14 +376,11 @@ export function recordStateMachineCompleted(
 }
 
 /**
- * Clear the terminal record so a previously-finished session runs as live
- * again. Reactivation is only legal as an explicit user-driven resume: the
- * parent selects a non-terminal state on a session whose `terminal` is set
- * because the user asked it to redo or continue the finished work. Both
- * `terminal` and the one-shot `terminalAcknowledged` flag are dropped so the
- * next terminal this session reaches gets its own acknowledgment turn, and the
- * prior outcome is preserved on a `state_machine_reactivated` event so replay
- * shows the completed→running transition rather than a silent rewrite.
+ * 清除终态记录，使之前完成的 Session 再次作为活动 Session 运行。只有显式的用户驱动恢复才允许
+ * reactivation：当 Session 设置了 `terminal`，且用户要求重做或继续已完成工作时，父 Agent 选择
+ * 一个非终态 state。`terminal` 和一次性的 `terminalAcknowledged` 标记都会被丢弃，使该 Session
+ * 到达的下一个终态拥有自己的 acknowledgment 回合；之前的结果则保留在
+ * `state_machine_reactivated` 事件中，因此 replay 会显示 completed→running 的转换，而不是静默改写。
  */
 export function recordStateMachineReactivated(
   stateMachine: StateMachineSession,
@@ -458,7 +443,7 @@ function clearProgressWakeTimes(
   return { states };
 }
 
-/** Attach constructed-work acceptance to its existing decision, without creating a second ledger. */
+/** 将已构造工作被接受的事实附加到现有决策，而不创建第二条 ledger。 */
 export function recordAcceptedExecution(
   session: StateMachineSession,
   execution: StateMachineExecutionReceipt,

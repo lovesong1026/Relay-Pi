@@ -2,13 +2,13 @@ import type { PGliteRuntimeAssetName } from "../../../src/memory/pglite.js";
 
 const GIT_SHA = /^[0-9a-f]{40}$/i;
 
-/** Stable E2B template name tied to every committed benchmark input. */
+/** 与每个已提交基准测试输入绑定的稳定 E2B 模板名称。 */
 export function e2bTemplateName(repositorySha: string): string {
   if (!GIT_SHA.test(repositorySha)) throw new Error("E2B template requires a full git SHA.");
   return `relay-pi-swebench-${repositorySha.slice(0, 12).toLowerCase()}`;
 }
 
-/** Select only model-gateway credentials; the E2B control key stays on the host. */
+/** 仅选择模型 gateway 凭据；E2B 控制密钥留在主机上。 */
 export function providerEnvironment(source: NodeJS.ProcessEnv): Record<string, string> {
   const result: Record<string, string> = {};
   for (const name of ["RELAY_PI_API_KEY", "AI_GATEWAY_API_KEY", "OPENROUTER_API_KEY"] as const) {
@@ -22,28 +22,28 @@ export function providerEnvironment(source: NodeJS.ProcessEnv): Record<string, s
 }
 
 export interface E2BEnvironmentProbe {
-  /** Immutable E2B template name derived from the repository SHA. */
+  /** 从仓库 SHA 派生的不可变 E2B 模板名称。 */
   templateName: string;
-  /** Provider-assigned identity of the built template. */
+  /** 构建后模板由 provider 分配的身份。 */
   templateId: string;
-  /** Resources visible to each worker sandbox. */
+  /** 每个 worker 沙箱可见的资源。 */
   cpuCount: number;
   memoryMb: number;
-  /** Exact committed source embedded in the template. */
+  /** 模板中嵌入的精确已提交源码。 */
   repositorySha: string;
   architecture: string;
   osRelease: string;
   dockerClientVersion: string;
   dockerServerVersion: string;
-  /** SHA-256 of the one Relay Pi binary embedded in the worker template. */
+  /** worker 模板中嵌入的唯一 Relay Pi 二进制的 SHA-256。 */
   relayPiArtifactSha256: string;
-  /** SHA-256 of every PGlite sidecar beside the compiled binary. */
+  /** 编译后二进制旁每个 PGlite sidecar 的 SHA-256。 */
   runtimeAssetSha256: Record<PGliteRuntimeAssetName, string>;
   pythonVersion: string;
   swebenchVersion: string;
 }
 
-/** Stable provenance shared byte-for-byte by every sandbox in one campaign. */
+/** 同一测试活动中所有沙箱逐字节共享的稳定 provenance。 */
 export function buildE2BEnvironmentLock(probe: E2BEnvironmentProbe): object {
   return {
     schemaVersion: 1,
@@ -74,7 +74,7 @@ export function buildE2BEnvironmentLock(probe: E2BEnvironmentProbe): object {
   };
 }
 
-/** Quote one trusted scalar for a remote POSIX shell command. */
+/** 为远程 POSIX shell 命令引用一个可信标量。 */
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

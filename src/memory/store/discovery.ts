@@ -5,11 +5,8 @@ import { walkAncestors } from "../../lib/walk-ancestors.js";
 
 const MEMORY_ROOT_NAMES = [".relay-pi", ".agents", ".claude"] as const;
 
-/**
- * Find real memory-store directories from cwd toward the filesystem root.
- * Nearest ancestors win naturally because callers consume this order first;
- * `$HOME` remains excluded by the shared project-scope ancestor walk.
- */
+/** 从 cwd 向文件系统根目录收集的真实 memory-store 目录。
+ * 最近的 ancestor 自然优先，因为调用方先消费此顺序；共享的 project-scope ancestor walk 会排除 `$HOME`。 */
 export async function discoverMemoryStores(cwd: string): Promise<string[]> {
   const stores: string[] = [];
   for (const ancestor of walkAncestors(cwd)) {

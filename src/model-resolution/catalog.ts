@@ -1,12 +1,12 @@
 import type { ConnectedProviderId } from "../connected-providers/store.js";
 
-/** Metered providers considered by the router when resolving an unpinned model. */
+/** 解析未固定 model 时，router 会考虑的计费 provider。 */
 export type RouterProviderName = "openrouter";
 
-/** Any backend capable of carrying a curated catalog model. */
+/** 能够承载精选 catalog model 的任意 backend。 */
 export type TransportName = RouterProviderName | ConnectedProviderId;
 
-/** Versionless model families accepted anywhere a curated shorthand is accepted. */
+/** 在接受精选 shorthand 的所有位置都有效的无版本 model family。 */
 export type FamilyName =
   | "fable"
   | "opus"
@@ -23,41 +23,38 @@ export type FamilyName =
   | "jev";
 
 export interface ProviderPreference {
-  /** Provider identifier accepted by pi-ai or handled locally by model resolution. */
+  /** pi-ai 接受或 model resolution 在本地处理的 provider 标识。 */
   provider: RouterProviderName;
-  /** Env var override for providers whose credential is not discoverable through pi-ai. */
+  /** 对于凭据无法通过 pi-ai 发现的 provider，使用 env var 覆盖。 */
   customEnvVar?: () => string | null;
 }
 
 export interface ProviderModelCandidate {
-  /** Provider that supports the candidate model. */
+  /** 支持该候选 model 的 provider。 */
   provider: RouterProviderName;
-  /** Fully resolved provider:modelId string passed to the runtime model loader. */
+  /** 传给运行时 model loader 的完整 provider:modelId 字符串。 */
   modelName: string;
 }
 
 interface ModelDefinition {
-  /** Versionless name whose first catalog entry is the family's latest model. */
+  /** 版本无关的名称；catalog 中第一个条目是该 family 的最新 model。 */
   family: FamilyName;
   shorthand: string;
   aliases: readonly string[];
   /**
-   * Provider-specific id used to carry this curated model on each supported
-   * transport. List a transport only when it actually serves the model: an
-   * unlisted transport is skipped, while a listed one the model catalog has not
-   * shipped resolves through `MISSING_MODEL_CLONES`.
+   * 用于在每个受支持 transport 上承载该精选 model 的 provider-specific id。只有 transport
+   * 实际提供该 model 时才列出：未列出的 transport 会跳过，而列出但 catalog 尚未发布该 id
+   * 的 transport 会通过 `MISSING_MODEL_CLONES` 解析。
    *
-   * Ids follow the transport's own namespace, which tracks the `TransportName`
-   * union: `RouterProviderName` routers aggregate many vendors and need the
-   * `vendor/model` prefix to disambiguate, while a `ConnectedProviderId`
-   * subscription is already scoped to one vendor and serves bare model names.
+   * Id 遵循 transport 自己的 namespace，并对应 `TransportName` union：`RouterProviderName`
+   * router 聚合多个 vendor，需要 `vendor/model` 前缀来消除歧义；`ConnectedProviderId`
+   * subscription 已限定到单个 vendor，因此使用不带前缀的 model 名称。
    */
   modelsByProvider: Partial<Record<TransportName, string>>;
   /**
-   * Hard cap on output tokens, applied when it is lower than the `maxTokens`
-   * the upstream pi-ai catalog reports. Some providers advertise a larger
-   * window than the backend they actually route to accepts, so the request 400s
-   * unless we clamp. Leave unset when the catalog value is already correct.
+   * 输出 token 的硬上限；仅当它低于上游 pi-ai catalog 报告的 `maxTokens` 时应用。某些
+   * provider 宣传的窗口大于实际路由到的 backend 所接受的窗口，因此不限制会导致请求
+   * 返回 400。catalog 值本身正确时留空。
    */
   maxOutputTokens?: number;
 }
@@ -66,8 +63,8 @@ export const DEFAULT_CLI_MODEL = "opus";
 export const DEFAULT_CLI_MEMORY_MODEL = "luna";
 
 /**
- * Global provider preference for shorthand resolution. OpenRouter is the only
- * metered router; connected subscriptions are consulted before it.
+ * shorthand resolution 的全局 provider 优先级。OpenRouter 是唯一的计费 router；
+ * 在它之前会先查询已连接的 subscription。
  */
 export const PROVIDER_ORDER: readonly ProviderPreference[] = [{ provider: "openrouter" }];
 
@@ -118,10 +115,9 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // The default observational-memory model. OpenRouter carries every OpenAI
-    // model on the Responses transport rather than over anthropic-messages,
-    // which would silently drop the low reasoning effort the observer and
-    // reflectors request.
+    // 默认的 observational-memory model。OpenRouter 通过 Responses transport 承载所有
+    // OpenAI model，而不是走 anthropic-messages，否则 observer 和 reflector 请求的低
+    // reasoning effort 会被静默丢弃。
     family: "luna",
     shorthand: "gpt-6-luna",
     aliases: ["openai/gpt-6-luna"],
@@ -167,11 +163,11 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     modelsByProvider: {
       openrouter: "moonshotai/kimi-k3",
     },
-    // Moonshot's provider route advertises a 131k maximum completion.
+    // Moonshot 的 provider route 宣传最大完成长度为 131k。
     maxOutputTokens: 131072,
   },
   {
-    // OpenRouter publishes Grok under the x-ai vendor namespace.
+    // OpenRouter 在 x-ai vendor namespace 下发布 Grok。
     family: "grok",
     shorthand: "grok-4.7",
     aliases: ["spacexai/grok-4.7", "spacexai/grok-4-7", "grok-4-7"],
@@ -180,7 +176,7 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // Leads the deepseek family, so the `deepseek` alias resolves here.
+    // 作为 deepseek family 的首项，因此 `deepseek` alias 会解析到这里。
     family: "deepseek",
     shorthand: "deepseek-v4.1-flash",
     aliases: ["deepseek/deepseek-v4.1-flash"],
@@ -189,20 +185,18 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // DeepSeek V4 Pro is served by OpenRouter under its own vendor namespace.
+    // DeepSeek V4 Pro 由 OpenRouter 在自己的 vendor namespace 下提供。
     family: "deepseek",
     shorthand: "deepseek-v4-pro",
     aliases: ["deepseek/deepseek-v4-pro"],
     modelsByProvider: {
       openrouter: "deepseek/deepseek-v4-pro",
     },
-    // The upstream backend rejects max_tokens above 262144 even though
-    // pi-ai's catalog advertises 384000.
+    // 即使 pi-ai catalog 宣传 384000，上游 backend 也会拒绝高于 262144 的 max_tokens。
     maxOutputTokens: 262144,
   },
   {
-    // Leads the fable family used by the advisor. Connected-account
-    // availability is still checked by the provider hook.
+    // advisor 使用的 fable family 首项。provider hook 仍会检查已连接账户是否可用。
     family: "fable",
     shorthand: "fable-5.1",
     aliases: [
@@ -217,7 +211,7 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // The previous fable, kept resolvable as a versioned pin.
+    // 上一个 fable，保留为可解析的版本化 pin。
     family: "fable",
     shorthand: "fable-5",
     aliases: ["claude-fable-5", "anthropic/claude-fable-5"],
@@ -227,7 +221,7 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // Zhipu's GLM 5.3 is served by OpenRouter as `z-ai/glm-5.3`.
+    // Zhipu 的 GLM 5.3 由 OpenRouter 以 `z-ai/glm-5.3` 提供。
     family: "glm",
     shorthand: "glm-5.3",
     aliases: ["zai/glm-5.3", "z-ai/glm-5.3", "glm-5-3"],
@@ -236,9 +230,8 @@ const MODEL_DEFINITIONS: readonly ModelDefinition[] = [
     },
   },
   {
-    // TypeSafe's Jev Router is OpenRouter-only and routes each request to the
-    // model and effort it judges best. Capabilities come from
-    // `MISSING_MODEL_CLONES` because pi-ai's catalog does not ship the id.
+    // TypeSafe 的 Jev Router 仅支持 OpenRouter，并会把每个请求路由到它判断最合适的
+    // model 和 effort。能力来自 `MISSING_MODEL_CLONES`，因为 pi-ai catalog 没有发布该 id。
     family: "jev",
     shorthand: "jev-router",
     aliases: ["typesafe/jev-router"],
@@ -255,23 +248,22 @@ for (const definition of MODEL_DEFINITIONS) {
   (shorthandsByFamily[definition.family] ??= []).push(definition.shorthand);
 }
 
-// Terra remains a durable selection for the coding role now served by Sol.
+// Terra 仍是由 Sol 承担的 coding role 的持久化选择。
 familyLatest.terra = familyLatest.sol;
 shorthandsByFamily.terra = shorthandsByFamily.sol;
 
 /**
- * Every curated shorthand, grouped by family in catalog order. Exported so
- * coverage checks enumerate the catalog itself rather than a hand-maintained
- * roster a newly added model would silently escape.
+ * 每个 family 的所有精选 shorthand，按 catalog 顺序分组并导出，使覆盖检查能够枚举 catalog
+ * 本身，而不是依赖手动维护的 roster，让新添加的 model 悄悄漏检。
  */
 export const SHORTHANDS_BY_FAMILY = Object.freeze(
   shorthandsByFamily as Record<FamilyName, readonly string[]>,
 );
 
-/** Latest shorthand for each family, derived from the first matching catalog entry. */
+/** 每个 family 的最新 shorthand，由匹配的 catalog 首个条目派生。 */
 export const FAMILY_LATEST = Object.freeze(familyLatest as Record<FamilyName, string>);
 
-/** Resolve a versionless family name to the first versioned shorthand in catalog order. */
+/** 将无版本的 family 名称解析为 catalog 顺序中的第一个版本化 shorthand。 */
 export function resolveFamilyShorthand(name: string): string | undefined {
   return FAMILY_LATEST[name.trim().toLowerCase() as FamilyName];
 }
@@ -281,15 +273,12 @@ export function isProviderPinnedModelName(modelName: string): boolean {
 }
 
 /**
- * Clamp a resolved model's output-token ceiling to the catalog's
- * `maxOutputTokens` when one is set and lower than the upstream value. Returns
- * the input unchanged when no override applies, so unknown or already-correct
- * models pass through untouched.
+ * 当 catalog 设置了 `maxOutputTokens` 且该值低于已解析 model 的输出上限时，将其限制到该值。
+ * 没有适用覆盖时原样返回输入，因此未知或已正确设置的 model 会直接通过。
  */
 export function clampModelOutputTokens<T extends { id: string; maxTokens: number }>(model: T): T {
-  // `getModel` returns undefined at runtime for pass-through provider:modelId
-  // values that are not in the catalog; resolution must forward those untouched
-  // rather than dereference a missing model.
+  // `getModel` 在运行时会对不在 catalog 中的 pass-through provider:modelId 值返回 undefined；
+  // resolution 必须原样转发它们，不能解引用缺失的 model。
   if (!model) return model;
   const cap = findModelDefinition(model.id)?.maxOutputTokens;
   if (cap === undefined || model.maxTokens <= cap) return model;
@@ -322,12 +311,12 @@ export function canonicalizeModelName(modelName: string): string {
   return findModelDefinition(modelName)?.shorthand ?? modelName;
 }
 
-/** Resolve a curated shorthand or alias to the id served by a specific transport. */
+/** 将精选 shorthand 或 alias 解析为指定 transport 提供的 id。 */
 export function transportModelId(transport: TransportName, shorthand: string): string | undefined {
   return findModelDefinition(shorthand)?.modelsByProvider[transport];
 }
 
-/** Every model id a transport serves, in catalog order. */
+/** 该 transport 提供的所有 model id，按 catalog 顺序排列。 */
 export function transportModelIds(transport: TransportName): string[] {
   return MODEL_DEFINITIONS.flatMap((definition) => {
     const modelId = definition.modelsByProvider[transport];
@@ -335,7 +324,7 @@ export function transportModelIds(transport: TransportName): string[] {
   });
 }
 
-/** Recover the curated shorthand represented by a transport-specific model id. */
+/** 根据 transport-specific model id 找回它代表的精选 shorthand。 */
 export function shorthandForTransportModel(
   transport: TransportName,
   modelId: string,
@@ -345,10 +334,9 @@ export function shorthandForTransportModel(
 }
 
 /**
- * Normalize a `provider:modelId` model id against catalog aliases so users can
- * pass familiar variants like `claude-opus-5-5` even when the underlying
- * provider catalog spells it `claude-opus-5.5`. Falls back to the input id
- * when no alias matches so unknown ids reach the provider lookup unchanged.
+ * 根据 catalog alias 规范化 `provider:modelId` model id，使用户能够传入熟悉的变体，例如
+ * `claude-opus-5-5`，即使底层 provider catalog 写作 `claude-opus-5.5` 也可以工作。
+ * 没有 alias 匹配时回退到输入 id，让未知 id 原样进入 provider lookup。
  */
 export function canonicalizeProviderModelId(provider: RouterProviderName, modelId: string): string {
   const definition = findModelDefinition(modelId);
@@ -367,9 +355,8 @@ function findModelDefinition(modelName: string): ModelDefinition | undefined {
 }
 
 /**
- * Map user-friendly provider names (and common aliases) onto the canonical
- * `RouterProviderName`. Returns `undefined` for unknown values so callers can
- * surface a list of accepted names.
+ * 将用户友好的 provider 名称（及常见 alias）映射到规范的 `RouterProviderName`。
+ * 未知值返回 `undefined`，让调用方展示可接受名称列表。
  */
 export function resolveProviderShorthand(name: string): RouterProviderName | undefined {
   switch (name.trim().toLowerCase()) {
@@ -380,22 +367,21 @@ export function resolveProviderShorthand(name: string): RouterProviderName | und
   }
 }
 
-/** Names accepted by `--provider`, in canonical order, for help and errors. */
+/** 按规范顺序列出 `--provider` 接受的名称，用于帮助信息和错误信息。 */
 export const PROVIDER_SHORTHANDS: readonly string[] = ["openrouter"];
 
-/** Build a `provider:modelId` reference for a provider's default chat model. */
+/** 为 provider 的默认 chat model 构造 `provider:modelId` 引用。 */
 export function pinnedDefaultModel(provider: RouterProviderName): string {
   return `${provider}:${getProviderDefaultModel(provider)}`;
 }
 
-/** Build a `provider:modelId` reference for a provider's memory model. */
+/** 为 provider 的 memory model 构造 `provider:modelId` 引用。 */
 export function pinnedMemoryModel(provider: RouterProviderName): string {
   return `${provider}:${getProviderMemoryModel(provider)}`;
 }
 
-/** Recover family intent from saved sessions and routing configuration.
- * Known replaced targets retain their transport; unknown selections and historical
- * message attribution stay untouched. */
+/** 从已保存的 Session 和 routing 配置中恢复 family 意图。
+ * 已知的替换目标保留其 transport；未知选择和历史 message attribution 保持不变。 */
 export function normalizeSavedModelSelection(modelName: string): string;
 export function normalizeSavedModelSelection(modelName: string | undefined): string | undefined;
 export function normalizeSavedModelSelection(modelName: string | undefined): string | undefined {

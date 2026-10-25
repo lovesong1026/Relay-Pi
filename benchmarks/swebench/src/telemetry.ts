@@ -7,86 +7,86 @@ import type {
 
 export type AdvisorCallOutcome = "success" | "rate_limited" | "unavailable" | "failed";
 
-/** Structurally parsed request-window metadata emitted by newer advisor results. */
+/** 从较新的 advisor 结果中结构化解析的 request-window 元数据。 */
 export interface AdvisorContextObservation {
-  /** Advisor model's advertised input-plus-output context window. */
+  /** advisor model 声明的输入加输出上下文窗口。 */
   contextWindowTokens: number;
-  /** Output allowance reserved before fitting executor context. */
+  /** 在适配 executor context 前预留的输出额度。 */
   reservedOutputTokens: number;
-  /** Conservative slack retained for provider tokenizer and request framing differences. */
+  /** 为 provider tokenizer 和请求封装差异保留的保守余量。 */
   safetyMarginTokens: number;
-  /** Maximum executor-context estimate after system and output reservations. */
+  /** 扣除 system 和 output 预留后的最大 executor context 估计值。 */
   inputLimitTokens: number;
-  /** Preferred total advisor input under the active product context policy. */
+  /** 当前产品 context policy 下建议的 advisor 总输入。 */
   inputTargetTokens?: number;
-  /** Estimated total advisor input, including the shared per-image charge. */
+  /** 估计的 advisor 总输入，包括共享的每张图像费用。 */
   estimatedInputTokens: number;
-  /** Executor messages retained in the advisor request. */
+  /** advisor 请求中保留的 executor 消息。 */
   includedMessages: number;
-  /** Raw executor messages represented by observational context. */
+  /** 通过观察式上下文表示的原始 executor 消息。 */
   compactedMessages?: number;
-  /** Oldest executor messages omitted at whole-message boundaries. */
+  /** 在整条消息边界被省略的最早 executor 消息。 */
   omittedMessages: number;
-  /** True when the real advisor model window forced message omission. */
+  /** 真实 advisor 模型窗口强制省略消息时为 true。 */
   truncated: boolean;
-  /** Executor images forwarded as multimodal request parts. */
+  /** 作为多模态请求部分转发的 executor 图像。 */
   attachedImages: number;
 }
 
-/** One advisor attempt located in the parent agent's canonical step sequence. */
+/** 位于 parent Agent 规范 step 序列中的一次 advisor attempt。 */
 export interface AdvisorCallObservation {
-  /** One-based index after streaming deltas and transient tool starts are removed. */
+  /** 移除流式增量和临时工具启动后的从 1 开始的索引。 */
   step: number;
   outcome: AdvisorCallOutcome;
-  /** Concrete provider model, available only after a successful consultation. */
+  /** 只有成功咨询后才可用的具体 provider model。 */
   model?: string;
-  /** Distinguishes old/missing metadata from malformed metadata and validated observations. */
+  /** 区分旧版/缺失元数据、格式错误元数据和已验证的观察记录。 */
   contextStatus: "valid" | "missing" | "malformed";
-  /** Present only when every context-fidelity field parsed with its required primitive type. */
+  /** 仅当每个 context-fidelity 字段都按要求的基本类型解析时存在。 */
   context?: AdvisorContextObservation;
   /**
-   * Relative position when an explicit repository `edit` or `write` is observable.
-   * `unknown` does not prove that no mutation occurred because shell commands are opaque.
+   * 如果能观察到明确的 repository `edit` 或 `write`，这里记录相对位置。
+   * `unknown` 不代表没有发生修改，因为 shell 命令是不透明的。
    */
   relativeToFirstExplicitRepositoryMutation: "before" | "after" | "unknown";
 }
 
-/** Advisor tool outcomes observable from generic tool-result details. */
+/** 从通用 tool-result details 中观察到的 advisor 工具结果。 */
 export interface AdvisorCallTelemetry {
-  /** All observed `ask_advisor` tool completions, including non-consulting outcomes. */
+  /** 所有观察到的 `ask_advisor` 工具完成，包括非咨询结果。 */
   total: number;
-  /** Calls that returned advice from a named concrete model. */
+  /** 返回命名具体 model 提供建议的调用。 */
   success: number;
-  /** Calls rejected by the product cadence gate. */
+  /** 被产品 cadence gate 拒绝的调用。 */
   rateLimited: number;
-  /** Calls made when no usable advisor route was available. */
+  /** 没有可用 advisor route 时发出的调用。 */
   unavailable: number;
-  /** Tool errors or malformed results that did not return usable advice. */
+  /** 没有返回可用建议的工具错误或格式错误结果。 */
   failed: number;
-  /** Successful advisor calls grouped by the concrete model reported by the tool. */
+  /** 按工具报告的具体 model 对成功 advisor 调用分组。 */
   successByModel: Record<string, number>;
   /**
-   * First successful explicit repository `edit` or `write`, or null when none is observable.
-   * Shell commands are deliberately not guessed to be read-only or mutating.
+   * 第一个明确的 repository `edit` 或 `write`；无法观察到时为 null。
+   * 不会臆测 shell 命令是只读还是会修改。
    */
   firstExplicitRepositoryMutationStep: number | null;
   /** Ordered call-level evidence used for attribution and context-fidelity admission. */
   attempts: AdvisorCallObservation[];
 }
 
-/** Re-derivable benchmark metrics computed only from the raw RPC event stream. */
+/** 仅根据原始 RPC 事件流重新推导的基准测试指标。 */
 export interface RolloutTelemetry {
-  /** Version of the persisted `telemetry.json` contract. */
+  /** 持久化 `telemetry.json` 契约的版本。 */
   schemaVersion: 3;
   costUsdTotal: number;
-  /** Provider spend grouped by concrete model id, never inferred as a runtime role. */
+  /** 按具体 model id 分组的 provider 支出，不推断运行时角色。 */
   costUsdByModel: Record<string, number>;
   tokens: Pick<TurnTokenUsage, "input" | "output" | "cacheRead" | "cacheWrite" | "totalTokens">;
-  /** Latest cumulative per-model ledger retained for exact downstream analysis. */
+  /** 为下游精确分析保留的最新累计 per-model ledger。 */
   usageByModel: ModelUsageEntry[];
   advisorCalls: AdvisorCallTelemetry;
   routerSwitches: Record<string, number>;
-  /** Canonical parent step events, excluding streaming deltas and subagent-origin steps. */
+  /** 规范的 parent step 事件，不包含流式增量和 subagent 来源的 step。 */
   steps: number;
   terminalStatus:
     | "completed"
@@ -205,12 +205,9 @@ export function deriveTelemetry(events: readonly TurnEvent[]): RolloutTelemetry 
   };
 }
 
-/**
- * Upgrade persisted telemetry before report code consumes it. Version 2 did
- * not record advisor request safety margins, so otherwise-successful context
- * observations from that schema are retained as malformed evidence instead of
- * being rendered as if they satisfied the current fidelity contract.
- */
+/** 在 report 代码消费前升级持久化 telemetry。v2 没有记录 advisor 请求安全余量，
+ * 因此该 schema 中原本成功的 context 观察会保留为格式错误证据，
+ * 而不会被渲染成满足当前 fidelity 契约的记录。 */
 export function normalizePersistedTelemetry(value: unknown): RolloutTelemetry {
   if (!value || typeof value !== "object") throw new Error("Malformed rollout telemetry.");
   const persisted = value as Omit<RolloutTelemetry, "schemaVersion"> & {

@@ -7,7 +7,7 @@ import type { ConnectedProviderId } from "./store.js";
 
 export const FAKE_ISSUER_ENV = "RELAY_PI_CONNECT_FAKE_ISSUER_URL";
 
-/** Concrete RFC-8628 contract imported by both client and issuer conformance tests. */
+/** 客户端和签发方一致性测试共同导入的具体 RFC-8628 契约。 */
 export const FAKE_ISSUER_WIRE_TABLE = {
   deviceCode: {
     method: "POST",
@@ -77,14 +77,14 @@ let installedBaseUrl: string | undefined;
 let installedProviders: readonly Provider[] | undefined;
 
 /**
- * Point the connected-provider registry at a fake issuer when one is
- * configured.
+ * 配置模拟签发方时，将已连接 provider 注册表
+ * 指向它。
  *
- * An OAuth implementation hangs off the provider that uses it, so standing in
- * for the real issuer means standing in for the whole provider:
- * `connectedProviders()` reads what this publishes in place of the built-in
- * one. Being a read rather than a global mutation is what keeps the swap
- * visible at the seam that consumes it.
+ * OAuth 实现挂在使用它的 provider 上，因此代替
+ * 真实签发方就意味着代替整个 provider：
+ * `connectedProviders()` 会读取此处发布的实现，而不是内置
+ * 实现。使用读取而非全局修改，才能让替换在
+ * 消费它的边界处保持可见。
  */
 export function installFakeIssuerIfConfigured(
   env: Record<string, string | undefined> = process.env,
@@ -102,13 +102,13 @@ export function installFakeIssuerIfConfigured(
   return "installed";
 }
 
-/** Forget any installed fake, so one test's issuer cannot leak into the next. */
+/** 清除已安装的模拟实现，避免一次测试的签发方泄漏到下一次。 */
 export function resetFakeIssuer(): void {
   installedBaseUrl = undefined;
   installedProviders = undefined;
 }
 
-/** The fake standing in for `id`, or undefined when none is configured. */
+/** 替代 `id` 的模拟实现；未配置时为 undefined。 */
 export function fakeConnectedProvider(id: ConnectedProviderId): Provider | undefined {
   return installedProviders?.find((provider) => provider.id === id);
 }
@@ -119,9 +119,9 @@ function createFakeProvider(id: ConnectedProviderId, name: string, baseUrl: stri
     name,
     baseUrl,
     api: openAICompletionsApi(),
-    // The issuer under test is a plain OpenAI-compatible server, so the real
-    // provider's models are carried over its transport with the vendor
-    // extensions a fixture cannot serve turned off.
+    // 被测签发方是一个普通的 OpenAI 兼容服务器，因此真实
+    // provider 的模型通过它的传输承载，并关闭 fixture 无法
+    // 提供的厂商扩展。
     models: getBuiltinModels(id as Parameters<typeof getBuiltinModels>[0]).map(
       (model): Model<"openai-completions"> => {
         const carried = model as Model<"openai-completions">;
@@ -172,9 +172,9 @@ function createFakeProvider(id: ConnectedProviderId, name: string, baseUrl: stri
 }
 
 /**
- * RFC-8628 polling for the fake issuer — pending, slow_down, denied, expired.
- * That is the whole protocol surface the conformance fixtures exercise, so it
- * is spelled out here rather than reaching for a general implementation.
+ * 模拟签发方的 RFC-8628 轮询——pending、slow_down、denied、expired。
+ * 这就是一致性 fixture 验证的全部协议范围，因此
+ * 在此明确实现，而不采用通用实现。
  */
 async function pollFakeDeviceCode(
   baseUrl: string,

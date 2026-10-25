@@ -115,7 +115,7 @@ export interface ObservationalMemoryActivityEvent {
  * 非预算选项通过 `resolveObservationalMemorySettings` 合并。派生表见 `MEMORY_BUDGET_RATIOS`。
  */
 export interface ObservationalMemorySettings {
-    /** 从原始 Agent 消息中提取新 observation 的设置。 */
+  /** 从原始 Agent 消息中提取新 observation 的设置。 */
   observation: {
     /**
      * 派生值。每 turn 触发通过 wire-shaping horizon 替换旧 transcript 内容的原始消息 token

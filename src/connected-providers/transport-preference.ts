@@ -7,29 +7,29 @@ import {
 import { CONNECTED_PROVIDER_ORDER, isConnectedProviderId, type ConnectionRecord } from "./store.js";
 
 export interface TransportSnapshot {
-  /** Connections present when the CLI process booted; later store edits apply on the next invocation. */
+  /** CLI 进程启动时存在的连接；后续存储改动在下次调用时生效。 */
   connections: readonly Pick<ConnectionRecord, "provider" | "eligibility">[];
   /**
-   * Router providers with a configured credential. When present, router-order
-   * selection skips unconfigured routers so a fallback never lands on a
-   * backend that cannot authenticate. Absent means "assume all configured"
-   * (explicit pins bypass this check either way).
+   * 已配置凭据的路由 provider。存在时，按路由顺序
+   * 选择会跳过未配置的路由器，使回退绝不会落到
+   * 无法认证的后端。缺省表示“假定全部已配置”
+   * （无论哪种情况，显式固定的选择都绕过此检查）。
    */
   configuredRouters?: readonly RouterProviderName[];
 }
 
 export interface TransportChoice {
-  /** Backend selected to carry the requested model. */
+  /** 被选中来承载所请求模型的后端。 */
   transport: TransportName;
-  /** Provider-specific model id sent on the selected transport. */
+  /** 在选定传输上发送的 provider 特定模型 id。 */
   modelId: string;
-  /** True when a connected subscription, rather than a metered router, carries the call. */
+  /** 当调用由已连接订阅而非按量计费的路由器承载时为真。 */
   planCovered: boolean;
-  /** Rule that selected this transport. */
+  /** 选中此传输的规则。 */
   reason: "connected" | "router_order" | "explicit_pin";
 }
 
-/** Choose a transport from an immutable boot snapshot without reading env or disk. */
+/** 从不可变的启动快照中选择传输，不读取环境变量或磁盘。 */
 export function chooseTransport(shorthand: string, snapshot: TransportSnapshot): TransportChoice {
   const separator = shorthand.indexOf(":");
   if (separator !== -1) {
@@ -61,8 +61,8 @@ export function chooseTransport(shorthand: string, snapshot: TransportSnapshot):
     }
   }
 
-  // Unknown names retain resolver.ts's pass-through behavior until it can
-  // produce the existing user-facing "Unknown model shorthand" error.
+  // 未知名称保留 resolver.ts 的直通行为，直到它能
+  // 产生已有的面向用户的 "Unknown model shorthand" 错误。
   return {
     transport: PROVIDER_ORDER[0]!.provider,
     modelId: shorthand,

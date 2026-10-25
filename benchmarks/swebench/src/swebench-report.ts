@@ -1,4 +1,4 @@
-/** Normalized official scorer outcome lists. */
+/** 规范化的官方 scorer 结果列表。 */
 export interface SwebenchReport {
   resolvedIds: string[];
   unresolvedIds: string[];

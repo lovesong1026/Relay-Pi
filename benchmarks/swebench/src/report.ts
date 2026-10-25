@@ -27,25 +27,25 @@ export type OfficialStatus =
   | "infra_error"
   | "missing";
 
-/** One normalized official scorer row written by `score_predictions.py`. */
+/** `score_predictions.py` 写入的一条规范化官方 scorer 记录。 */
 export interface OfficialScoreRow {
   instanceId: string;
-  /** Canonical scorer model identity encoding the campaign config and trial. */
+  /** 编码测试活动配置与 trial 的规范 scorer model 身份。 */
   model: string;
   status: OfficialStatus;
   error?: string;
 }
 
-/** Rollout evidence consumed by the pure report core. */
+/** pure report core 消费的 rollout 证据。 */
 export interface ReportAttempt {
   instanceId: string;
   config: CampaignConfigName;
-  /** One-based campaign repetition that produced this attempt. */
+  /** 产生该 attempt 的从 1 开始的测试活动 repetition。 */
   trial: number;
   phase: "running" | "completed" | "failed";
-  /** Classifies a failed attempt so reports keep model and infrastructure failures distinct. */
+  /** 对失败 attempt 分类，让报告区分模型失败与基础设施失败。 */
   failureKind?: RolloutFailureKind;
-  /** Preserves the actionable failure detail written by the rollout artifact status. */
+  /** 保留 rollout artifact status 写入的可操作失败详情。 */
   failureMessage?: string;
   terminalType?: string;
   costUsd: number;
@@ -65,48 +65,48 @@ export interface ConfigReport {
   failures: Record<string, number>;
   patchViolations: string[];
   byLanguage: Record<string, { resolved: number; total: number }>;
-  /** Aggregate result for each one-based campaign repetition. */
+  /** 每个从 1 开始的测试活动 repetition 的汇总结果。 */
   byTrial: TrialConfigReport[];
-  /** Present only for advisor-enabled arms; it describes exposure without gating ITT. */
+  /** 仅 advisor-enabled arm 存在；描述 exposure，但不影响 ITT。 */
   consultation: ConfigConsultationReport | null;
 }
 
-/** Aggregate result for one repetition of a campaign configuration. */
+/** 测试活动配置一次 repetition 的汇总结果。 */
 export interface TrialConfigReport {
-  /** One-based campaign repetition. */
+  /** 从 1 开始的测试活动 repetition。 */
   trial: number;
-  /** Rollouts resolved in this repetition. */
+  /** 此 repetition 中解析成功的 rollout。 */
   resolved: number;
-  /** Manifest instances scheduled in this repetition. */
+  /** 此 repetition 中安排的 manifest 实例。 */
   total: number;
 }
 
-/** One instance repetition in a paired comparison bucket. */
+/** 成对比较 bucket 中的一个实例 repetition。 */
 export interface TrialResult {
-  /** SWE-bench instance evaluated by both sides of the pair. */
+  /** 成对两侧都评估的 SWE-bench 实例。 */
   instanceId: string;
-  /** One-based repetition shared by both sides of the pair. */
+  /** 成对两侧共享的从 1 开始 repetition。 */
   trial: number;
 }
 
 export type PairedOutcome = "enabled_only" | "pure_only" | "both_resolve" | "neither_resolves";
 
 export interface PairedOutcomeBuckets {
-  /** Enabled arm resolved and paired pure arm did not. */
+  /** enabled arm 解析成功而成对 pure arm 未成功。 */
   enabledOnly: TrialResult[];
-  /** Pure arm resolved and paired enabled arm did not. */
+  /** pure arm 解析成功而成对 enabled arm 未成功。 */
   pureOnly: TrialResult[];
-  /** Both paired arms resolved. */
+  /** 两个成对 arm 都解析成功。 */
   bothResolve: TrialResult[];
-  /** Neither paired arm resolved, including denominator-visible failures. */
+  /** 两个成对 arm 都未解析成功，包括分母中可见的失败。 */
   neitherResolves: TrialResult[];
 }
 
 export type ConsultationStatus = "successful" | "not_called" | "unsuccessful" | "missing_telemetry";
 
-/** Per-instance exposure evidence retained alongside the primary randomized comparison. */
+/** 与主要随机比较一起保留的逐实例 exposure 证据。 */
 export interface ConsultationEvidenceReport {
-  /** Manifest id that binds this evidence to one randomized pair. */
+  /** 将该证据绑定到一个随机 pair 的 manifest id。 */
   instanceId: string;
   /** One-based repetition that binds this evidence to one randomized pair. */
   trial: number;

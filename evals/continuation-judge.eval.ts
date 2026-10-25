@@ -3,15 +3,9 @@ import { testIfDocker } from "../test/helpers/docker-only.js";
 import { judgeContinuesRecentWork } from "./helpers/continuation-judge.js";
 
 /**
- * Judge-the-judge eval for `judgeContinuesRecentWork`.
+ * 针对 `judgeContinuesRecentWork` 的 judge-the-judge eval。
  *
- * Before `evals/session-compaction-continues-recent-work.eval.ts`
- * uses this judge to grade a real model run, the judge is exercised
- * here against hand-crafted positive and negative replies whose
- * correct verdict is obvious to a human reader. If the judge starts
- * passing the literal cold-greeting reply or failing a clearly
- * substantive continuation, this eval catches it before the live
- * eval false-passes a wire-starvation regression.
+ * 在 `evals/session-compaction-continues-recent-work.eval.ts` 使用该 judge 为真实 model run 评分之前，这里先用人工构造的正、负 reply 测试它，且正确 verdict 对人类读者显而易见。如果 judge 开始通过字面上的冷问候 reply，或拒绝明显有实质内容的 continuation，该 eval 会在 live eval 因 wire-starvation 回归而误通过之前捕获问题。
  */
 
 const RECENT_WORK = `
@@ -28,9 +22,7 @@ nearby pi-ai provider wiring to confirm the OpenAI-Responses path
 emits reasoning blocks.
 `.trim();
 
-// Verbatim reply from the failing session that this judge has to
-// reject. If we ever loosen the judge enough to pass this, we have
-// regressed.
+// 失败 session 中的原样 reply，该 judge 必须拒绝它。如果我们把 judge 放宽到能通过这条 reply，就说明发生了回归。
 const COLD_GREETING_REPLY = "I'm here — what would you like to work on next?";
 
 const GENERIC_OFFER_REPLY = `
@@ -51,9 +43,7 @@ is true. Want me to also add a regression in \`test/cli.test.ts\`
 pinning the resolved API to \`openai-responses\`?
 `.trim();
 
-// A reply that names ONE concrete anchor from the work but otherwise
-// punts. Judge should still mark this invalid — naming a file alone
-// is not enough; the reply must also propose a step or finding.
+// 只提到一个具体工作锚点、但其他内容都推脱的 reply。Judge 仍应将其标为无效——仅仅提到一个文件不够；reply 还必须提出步骤或发现。
 const NAME_DROP_ONLY_REPLY = `
 We were looking at \`src/model-resolution/openrouter.ts\`. What
 would you like me to do?

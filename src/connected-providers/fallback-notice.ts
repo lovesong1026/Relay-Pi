@@ -3,7 +3,7 @@ import type { ConnectedProviderId } from "./store.js";
 
 export type TransportFallbackCause = "plan_exhausted" | "auth_failed" | "transport_error";
 
-/** Own the single user-visible sentence emitted when a connected call falls back. */
+/** 统一维护已连接调用回退时向用户显示的那一句提示。 */
 export function transportFallbackNotice(input: {
   provider: ConnectedProviderId;
   modelName: string;

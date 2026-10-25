@@ -10,40 +10,40 @@ export type { OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 export type ConnectedProviderId = "openai-codex" | "github-copilot";
 export type ConnectionEligibility = "unknown" | "eligible" | "plan_ineligible";
 
-/** Stable precedence for persisted records and connected transport selection. */
+/** 持久化记录和已连接传输选择使用的稳定优先顺序。 */
 export const CONNECTED_PROVIDER_ORDER: readonly ConnectedProviderId[] = [
   "openai-codex",
   "github-copilot",
 ];
 
-/** Narrow an arbitrary pi-ai provider id to one owned by the connected store. */
+/** 将任意 pi-ai provider id 收窄为连接存储维护的 id。 */
 export function isConnectedProviderId(provider: string): provider is ConnectedProviderId {
   return CONNECTED_PROVIDER_ORDER.some((candidate) => candidate === provider);
 }
 
 export interface ConnectionRecord {
-  /** Transport whose subscription these credentials authorize. */
+  /** 这些凭据所授权订阅对应的传输。 */
   provider: ConnectedProviderId;
-  /** Complete pi-ai OAuth token set; refresh replaces this object wholesale. */
+  /** 完整的 pi-ai OAuth 令牌集合；刷新时整体替换此对象。 */
   credentials: OAuthCredentials;
-  /** Epoch milliseconds when the user completed the connection flow. */
+  /** 用户完成连接流程时距纪元的毫秒数。 */
   connectedAt: number;
-  /** Whether the linked subscription passed the provider capability probe. */
+  /** 关联订阅是否通过 provider 能力探测。 */
   eligibility: ConnectionEligibility;
-  /** Epoch milliseconds of the latest capability probe, when one has run. */
+  /** 最近一次能力探测时距纪元的毫秒数，仅在已探测时存在。 */
   eligibilityCheckedAt?: number;
-  /** Epoch milliseconds of the latest successful credential refresh. */
+  /** 最近一次成功刷新凭据时距纪元的毫秒数。 */
   lastRefreshAt?: number;
 }
 
 export interface ConnectedProviderStore {
-  /** Read every valid record without taking the writer lock. */
+  /** 不获取写锁，读取所有有效记录。 */
   read(): Promise<ConnectionRecord[]>;
-  /** Read one provider's current record without taking the writer lock. */
+  /** 不获取写锁，读取一个 provider 的当前记录。 */
   get(id: ConnectedProviderId): Promise<ConnectionRecord | undefined>;
-  /** Delete one provider while preserving every other valid record. */
+  /** 删除一个 provider，同时保留其他所有有效记录。 */
   remove(id: ConnectedProviderId): Promise<void>;
-  /** Locked read-modify-write; mutate receives the current on-disk record. */
+  /** 加锁的读-改-写；mutate 接收当前磁盘记录。 */
   withLock<T>(
     id: ConnectedProviderId,
     mutate: (

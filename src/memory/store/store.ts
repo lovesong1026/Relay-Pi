@@ -11,45 +11,44 @@ import {
   type MemoryFileRecord,
 } from "./file.js";
 
-/** Public view of a record read from a concrete memory-store directory. */
+/** 从具体 memory-store 目录读取的一条 record 的公开视图。 */
 export interface StoredMemory {
-  /** Filename stem and authoritative identity within a store. */
+  /** Filename stem，以及 store 内的权威 identity。 */
   slug: string;
-  /** Absolute directory containing the record, used as its provenance layer. */
+  /** 包含 record 的绝对目录，作为 provenance layer 使用。 */
   storeDir: string;
-  /** Stable record identity shared with APIs and private archive metadata. */
+  /** 与 API 和私有 archive metadata 共享的稳定 record identity。 */
   id: string;
-  /** Whether the content is synthesized training or a directly curated note. */
+  /** 内容是 synthesized training，还是直接精选的 note。 */
   kind: MemoryFileRecord["kind"];
-  /** Unix epoch milliseconds used for observed dates and newest-first ordering. */
+  /** 用于 observed date 和从新到旧排序的 Unix epoch 毫秒数。 */
   createdAt: number;
-  /** Short display label for the curated content. */
+  /** 精选内容的简短展示标签。 */
   headline?: string;
-  /** Model identifier that produced synthesized content, when applicable. */
+  /** 生成 synthesized 内容的 model 标识（适用时存在）。 */
   model?: string;
-  /** Number of source files represented by synthesized content. */
+  /** synthesized 内容表示的 source 文件数。 */
   fileCount?: number;
-  /** Private archive manifest identifier; never an absolute archive path. */
+  /** 私有 archive manifest 标识；绝不是绝对 archive 路径。 */
   archiveId?: string;
-  /** Exact curated markdown body. */
+  /** 精确的精选 markdown body。 */
   content: string;
 }
 
-/** Input for a new file; the slug selects its filename and is never serialized. */
+/** 新文件的输入；slug 选择文件名，且不会被序列化。 */
 export interface MemoryEntryInput extends MemoryFileRecord {
-  /** Safe filename stem used for `<slug>.md`. */
+  /** 用于 `<slug>.md` 的安全 filename stem。 */
   slug: string;
 }
 
-/** List valid markdown records in lexical slug order. */
+/** 按 lexical slug 顺序列出有效的 markdown record。 */
 export async function listStore(dir: string): Promise<StoredMemory[]> {
   return listStoreWithInvalidPolicy(dir);
 }
 
 /**
- * List valid records while isolating malformed files. Runtime prompt loading
- * uses this best-effort form so one hand-edited file cannot block startup;
- * management commands retain {@link listStore}'s strict failure behavior.
+ * 列出有效 record，同时隔离格式错误的文件。Runtime prompt 加载使用此 best-effort 形式，
+ * 因此手工编辑的单个文件不会阻塞启动；管理命令仍保留 {@link listStore} 的严格失败行为。
  */
 export async function listStoreTolerant(
   dir: string,
@@ -86,7 +85,7 @@ async function listStoreWithInvalidPolicy(
   return loaded.filter((entry): entry is StoredMemory => entry !== undefined);
 }
 
-/** Read one record by its safe filename stem. */
+/** 按安全的 filename stem 读取一条 record。 */
 export async function readEntry(dir: string, slug: string): Promise<StoredMemory> {
   const safeSlug = assertSlug(slug);
   const storeDir = await requireStoreDirectory(dir, false);
@@ -94,7 +93,7 @@ export async function readEntry(dir: string, slug: string): Promise<StoredMemory
   return (await readParsedEntry(storeDir, safeSlug)).stored;
 }
 
-/** Atomically create or replace one memory file. */
+/** 原子地创建或替换一个 memory 文件。 */
 export async function writeEntry(dir: string, record: MemoryEntryInput): Promise<StoredMemory> {
   const slug = assertSlug(record.slug);
   const bytes = serializeMemoryFile(record);
@@ -120,7 +119,7 @@ export async function writeEntry(dir: string, record: MemoryEntryInput): Promise
   return toStoredMemory(storeDir, slug, record);
 }
 
-/** Replace only a record's curated body while preserving all frontmatter. */
+/** 仅替换 record 的精选 body，同时保留所有 frontmatter。 */
 export async function updateEntry(
   dir: string,
   slug: string,
@@ -131,12 +130,12 @@ export async function updateEntry(
   if (!storeDir) throw new Error(`Memory store does not exist: ${resolve(dir)}`);
   const { record } = await readParsedEntry(storeDir, safeSlug);
   record.content = content;
-  // Keep the parsed object identity so serializeMemoryFile can retain CRLF;
-  // spreading here would detach the codec's private line-ending metadata.
+  // 保留解析对象的 identity，让 serializeMemoryFile 能够保留 CRLF；在这里使用 spread 会
+  // 脱离 codec 的私有 line-ending metadata。
   return writeEntry(storeDir, Object.assign(record, { slug: safeSlug }));
 }
 
-/** Delete one record and return the bytes' parsed public view. */
+/** 删除一条 record，并返回其 bytes 的已解析公开视图。 */
 export async function deleteEntry(dir: string, slug: string): Promise<StoredMemory> {
   const safeSlug = assertSlug(slug);
   const storeDir = await requireStoreDirectory(dir, false);
@@ -162,9 +161,8 @@ async function readParsedEntry(
   return { stored: toStoredMemory(storeDir, slug, record), record };
 }
 
-// A hand-written file names no id or creation time. Its identity is then a
-// function of where it lives: stable across reads, distinct across stores that
-// share a slug, and written into the file the first time it is re-serialized.
+// 手写文件没有 id 或创建时间。因此它的 identity 由所在位置决定：读取之间稳定，
+// 在共享 slug 的不同 store 之间互不相同，并会在首次重新序列化时写入文件。
 function derivedIdentity(
   storeDir: string,
   slug: string,

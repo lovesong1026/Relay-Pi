@@ -7,7 +7,7 @@ import { LocalCommandRunner, type CommandRunner } from "./container.js";
 import type { CampaignSpec } from "./orchestrator.js";
 import type { RelayPiArtifact } from "./packaging.js";
 
-/** Frozen campaign inputs embedded beside rollout artifacts. */
+/** 嵌入 rollout artifact 旁的冻结测试活动输入。 */
 export interface CampaignProvenance {
   schemaVersion: 1;
   inputHash: string;
@@ -23,7 +23,7 @@ export interface CampaignProvenance {
   };
 }
 
-/** Write-once provenance; a resume must reproduce the same frozen input hash. */
+/** 只写一次的 provenance；恢复时必须重现同一个冻结输入哈希。 */
 export async function ensureCampaignProvenance(options: {
   repoRoot: string;
   runsRoot: string;

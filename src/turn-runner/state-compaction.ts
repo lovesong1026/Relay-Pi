@@ -2,53 +2,46 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { TurnState } from "../types/protocol.js";
 
 /**
- * Default ceiling for auto state compaction, in bytes of serialized
- * `TurnState`. Long-lived sessions accumulate tool calls and tool results
- * forever; without a cap, every emit and every disk persist eventually drags
- * on a multi-hundred-MB transcript.
+ * 自动 state 压缩的默认上限，以序列化 `TurnState` 的字节数计。
+ * 长期 Session 会不断累积工具调用和工具结果；没有上限时，每次 emit 和磁盘持久化最终都会
+ * 受到数百 MB transcript 的拖累。
  *
- * 100 MB is enough headroom for hours of dense tool-call work, small enough
- * that emit/persist stay snappy on commodity hardware. Adjustable per-runner
- * via `TurnRunnerConfig.autoStateCompaction.maxBytes`.
+ * 100 MB 足以为数小时密集的工具调用工作留出余量，同时又足够小，使 emit/persist 在普通硬件
+ * 上保持敏捷。可通过 `TurnRunnerConfig.autoStateCompaction.maxBytes` 按 runner 调整。
  */
 export const DEFAULT_STATE_MAX_BYTES = 100 * 1024 * 1024;
 
 /**
- * Even when a single message exceeds the cap, keep at least this many
- * messages so the next turn still has anchor context. The runner can recover
- * from a truncated transcript, but not from an empty one.
+ * 即使单条消息超过上限，也至少保留这么多条消息，使下一回合仍有锚点上下文。
+ * runner 可以从截断的 transcript 中恢复，但无法从空 transcript 中恢复。
  */
 export const MIN_RETAINED_MESSAGES = 1;
 
 export interface AutoStateCompactionOptions {
-  /** Hard ceiling for `JSON.stringify(state).length`. Defaults to 100 MB. */
+  /** `JSON.stringify(state).length` 的硬上限。默认为 100 MB。 */
   maxBytes?: number;
 }
 
 export interface CompactionResult {
   state: TurnState;
   evicted: number;
-  /** Serialized byte length after compaction, for caller logging/metrics. */
+  /** 压缩后的序列化字节长度，供调用方记录日志/指标。 */
   bytes: number;
 }
 
 /**
- * Fraction of the parent agent's effective context window that the on-demand
- * `compact` command targets for the surviving wire-tail. 20% is an
- * intentionally aggressive ceiling: it leaves the remaining 80% of the
- * window for the system prompt, memory packs, the next user prompt, and
- * the next assistant response, so a freshly compacted session has real
- * headroom for the next turn instead of immediately bumping the
- * auto-compaction ceiling again. The runner consumes this via the
- * wire-shaping `WireGuardHorizon`; nothing on disk changes.
+ * 按父 Agent 有效上下文窗口的比例计算按需 `compact` 命令针对保留 wire 尾部的目标。
+ * 20% 是有意设置的激进上限：剩余 80% 留给系统提示词、memory pack、下一条用户 prompt
+ * 和下一条 assistant 响应，使刚压缩的 Session 为下一回合保留真实余量，而不是立刻再次触发
+ * auto-compaction 上限。runner 通过 wire-shaping 的 `WireGuardHorizon` 使用此值；磁盘上不会
+ * 发生变化。
  */
 export const COMPACT_MESSAGE_TOKENS_RATIO = 0.2;
 
 /**
- * Anthropic and OpenAI both reject conversations whose first message isn't
- * `user`. Front-eviction can leave a `toolResult` (orphaned without its
- * assistant call) or an `assistant` message at the head, both of which wedge
- * the next turn on resume.
+ * Anthropic 和 OpenAI 都会拒绝首条消息不是 `user` 的对话。
+ * 从前端淘汰可能留下 `toolResult`（没有其 assistant 调用而成为孤儿）或位于开头的
+ * `assistant` 消息；这两种情况都会使恢复后的下一回合卡住。
  */
 function isInvalidHead(message: AgentMessage | undefined): boolean {
   if (!message || !("role" in message)) return false;
@@ -77,9 +70,8 @@ function toolCallIds(message: AgentMessage): Set<string> {
 }
 
 /**
- * Find both messages in every tool-call/result pair whose result carries a
- * live task id. A result can be separated from its assistant call by sibling
- * results, so match the structural tool-call id rather than adjacency.
+ * 查找每个工具调用/结果配对中的两条消息，结果中携带仍在运行的 task ID。
+ * 结果可能被同级结果与其 assistant 调用隔开，因此应匹配结构上的工具调用 ID，而不是依赖相邻关系。
  */
 function findLiveTaskPairMessages(
   state: TurnState,
@@ -115,25 +107,20 @@ function findLiveTaskPairMessages(
 }
 
 /**
- * Returns a new `TurnState` whose serialized size is at most `maxBytes`,
- * evicting the oldest agent messages first. After each eviction, drops any
- * leading `toolResult` or `assistant` message until the head is `user` — the
- * only role every provider accepts at position 0.
+ * 返回一个新的 `TurnState`，其序列化大小不超过 `maxBytes`，优先淘汰最旧的 Agent 消息。
+ * 每次淘汰后，继续丢弃开头的 `toolResult` 或 `assistant` 消息，直到开头变为 `user`——这是
+ * 每个 provider 都接受的唯一位置 0 角色。
  *
- * Front-eviction preserves tool-call / tool-result pairing by construction.
- * When a result carries a live task id, both sides of that pair are pinned:
- * the full invalid-head cascade is inspected before removal, and compaction
- * stops at the preceding valid boundary rather than split or evict the pair.
- * `TurnState.tasks` remains authoritative if no transcript pair can be found.
+ * 前端淘汰通过构造保证工具调用/工具结果配对不被破坏。当结果携带仍在运行的 task ID 时，
+ * 配对双方都会被固定：移除前会检查完整的无效开头级联，并在前一个有效边界处停止，而不会
+ * 拆分或淘汰该配对。如果找不到 transcript 配对，`TurnState.tasks` 仍是权威来源。
  *
- * Preserves the original state reference (no mutation) and every non-message
- * field on `TurnState` and `state.agent` (`status`, `mode`, `options`,
- * `stateMachine`, `todos`, `followUpQueue`, `queuedCommands`, `tasks`, and
- * `nextTaskId`).
+ * 保留原始 state 引用（不修改），以及 `TurnState` 和 `state.agent` 上每个非消息字段
+ *（`status`、`mode`、`options`、`stateMachine`、`todos`、`followUpQueue`、`queuedCommands`、
+ * `tasks` 和 `nextTaskId`）。
  *
- * Stops once `messages.length <= MIN_RETAINED_MESSAGES`. If the remainder
- * still exceeds `maxBytes`, the caller persists/emits the oversize state: a
- * truncated but recoverable transcript beats a wedged session.
+ * 当 `messages.length <= MIN_RETAINED_MESSAGES` 时停止。如果剩余内容仍超过 `maxBytes`，
+ * 调用方会持久化/emit 超大 state：可恢复的截断 transcript 胜过卡死的 Session。
  */
 export function compactTurnState(
   state: TurnState,
@@ -147,8 +134,7 @@ export function compactTurnState(
 
   const messages = state.agent?.messages;
   if (!messages || messages.length === 0) {
-    // Non-message bloat (e.g. enormous queuedCommands). Nothing this layer
-    // can do.
+    // 非消息膨胀（例如巨大的 queuedCommands）。此层无能为力。
     return { state, evicted: 0, bytes: serialized.length };
   }
 

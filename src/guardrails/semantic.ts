@@ -20,8 +20,8 @@ const semanticGuardrailTool: Tool<typeof semanticGuardrailResultSchema> = {
 };
 
 /**
- * Semantic guardrail: uses an LLM to evaluate whether an action
- * is safe and appropriate. Expensive but catches nuanced violations.
+ * 语义防护：使用 LLM 评估操作是否
+ * 安全且适当。成本较高，但能发现细微的违规。
  */
 export class SemanticGuardrail implements Guardrail {
   name = "semantic";

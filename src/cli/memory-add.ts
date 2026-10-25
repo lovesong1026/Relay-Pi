@@ -21,19 +21,19 @@ import { fail, loadCliEnvFiles, usageError } from "./shared.js";
 type SourceKind = ObservationSource["kind"];
 
 interface AddCommandOptions {
-  /** Explicit backend flags; empty means flagless store discovery. */
+  /** 显式后端标志；为空表示不带标志的存储发现。 */
   sourceFlags: MemorySourceFlags;
-  /** Compatibility projection for callers that inspect a single selected DB. */
+  /** 为检查单个选定数据库的调用方提供的兼容投影。 */
   dbPath: string;
-  /** Positional content joined with spaces; empty when the caller pipes via stdin instead. */
+  /** 用空格连接的位置参数内容；调用方改用 stdin 管道时为空。 */
   content: string;
   priority: ObservationPriority;
-  /** Provenance stamped on the row and echoed back; defaults to `user`. */
+  /** 标记在记录上并回显的来源；默认为 `user`。 */
   source: SourceKind;
   tags: string[];
-  /** Session that authored the row; omitted leaves the row global/unattributed. */
+  /** 创建该记录的会话；省略则记录保持全局/无归属。 */
   sessionId?: string;
-  /** Emit the selected backend's JSON record instead of the human line. */
+  /** 输出所选后端的 JSON 记录，而非供人阅读的单行文本。 */
   json: boolean;
   waitBudgetMs?: number;
 }
@@ -41,31 +41,31 @@ interface AddCommandOptions {
 interface AddCommandIO {
   stdout: NodeJS.WritableStream;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
-  /** Working directory used for relative paths and flagless source discovery. */
+  /** 用于相对路径和无标志来源发现的工作目录。 */
   cwd?: string;
   /**
-   * Embedding client for the synchronous insert-time embed. Defaults to
-   * the OpenRouter endpoint client; tests inject a stub (or a throwing one) to
-   * pin the embedded/degraded paths without a network call.
+   * 插入时同步生成 embedding 所用的客户端。默认使用
+   * OpenRouter 端点客户端；测试注入桩（或抛出异常的桩），
+   * 无需网络调用即可验证 embedding 成功/降级路径。
    */
   embed?: EmbedFn;
 }
 
 /**
- * Run `relay-pi memory add` — write one curated note to a memory-file store or
- * the legacy observational DB. Flagless writes create the nearest agent's
- * `.agents/memories` directory. DB notes retain their ranking, reflection,
- * session-attribution, and synchronous-embedding behavior; file notes retain
- * priority/source/tags in frontmatter and are loaded through store context.
+ * 运行 `relay-pi memory add`，将一条整理后的笔记写入记忆文件存储
+ * 或旧版观察式数据库。不带标志的写入会创建最近 agent 的
+ * `.agents/memories` 目录。数据库笔记保留其排名、反思、
+ * 会话归属和同步 embedding 行为；文件笔记将
+ * 优先级/来源/标签保存在 frontmatter 中，并通过存储上下文加载。
  *
- * Content comes from the positional arguments, or from stdin when none are
- * given so callers can pipe longer text (`echo "…" | relay-pi memory add`).
+ * 内容来自位置参数；未提供时则从 stdin 读取，
+ * 以便调用方通过管道传入较长文本（`echo "…" | relay-pi memory add`）。
  *
- * For DB targets, the embedding is written synchronously alongside the row
- * (no backfill worker runs in this one-shot process), so `relay-pi memory recall`
- * and the next session's `recall_memory` reach it semantically right away.
- * When embeddings are unavailable the add still succeeds and the next
- * runner's backfill pass embeds the row.
+ * 对于数据库目标，embedding 与记录同步写入
+ * （这个单次进程不运行回填 worker），因此 `relay-pi memory recall`
+ * 和下次会话的 `recall_memory` 可以立即通过语义检索找到它。
+ * embedding 不可用时，添加仍会成功，后续
+ * 运行器的回填过程会为该记录生成 embedding。
  */
 export async function runMemoryAddCommand(
   args: string[],
@@ -74,8 +74,8 @@ export async function runMemoryAddCommand(
   const cwd = io.cwd ?? process.cwd();
   const options = parseMemoryAddArgs(args, cwd);
   if (!options) return;
-  // Embedding writes need the shared credential even when it lives only in
-  // an env file, matching the run command's load order.
+  // 即使共享凭据只存在于 env 文件中，embedding 写入也需要它，
+  // 加载顺序与 run 命令一致。
   loadCliEnvFiles(cwd);
 
   const content = await resolveContent(options.content, io);
@@ -111,9 +111,9 @@ export async function runMemoryAddCommand(
   }
 
   if (options.json) {
-    // Score with a single `now`; on insert `lastUsedAt == createdAt`, so the
-    // pack score reflects a freshly stored row. `relevanceScore` is absent —
-    // there is no query to rank the row against on an add.
+    // 使用同一个 `now` 评分；插入时 `lastUsedAt == createdAt`，因此
+    // 记忆包分数反映刚存储的记录。省略 `relevanceScore`，
+    // 因为添加时没有可用于排名的查询。
     const packScore = scoreObservation(observation, Date.now());
     io.stdout.write(`${JSON.stringify(toMemoryJson(observation, { packScore }), null, 2)}\n`);
     return;
@@ -126,9 +126,9 @@ export async function runMemoryAddCommand(
 }
 
 /**
- * Parse `relay-pi memory add` flags and positional content. Returns `undefined`
- * when `--help` was handled. Pure (no I/O) so it can be unit-tested; stdin
- * fallback for empty content happens later in {@link resolveContent}.
+ * 解析 `relay-pi memory add` 标志和位置参数内容。处理了 `--help`
+ * 后返回 `undefined`。它是纯函数（无 I/O），可进行单元测试；内容为空时
+ * 从 stdin 读取的后备处理稍后在 {@link resolveContent} 中执行。
  */
 export function parseMemoryAddArgs(
   args: string[],
@@ -201,9 +201,9 @@ export function parseMemoryAddArgs(
 }
 
 /**
- * Resolve the memory text: positional content when present, otherwise stdin
- * so longer memories can be piped in. A TTY with no content is a usage error
- * rather than an indefinite wait, and empty resolved content is rejected.
+ * 解析记忆文本：存在位置参数内容时使用它，否则从 stdin 读取，
+ * 以便通过管道传入较长记忆。TTY 下无内容视为用法错误，
+ * 而不是无限等待；解析后的内容为空时也会拒绝。
  */
 async function resolveContent(positional: string, io: AddCommandIO): Promise<string> {
   let content = positional;

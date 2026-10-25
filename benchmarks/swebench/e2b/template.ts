@@ -11,7 +11,7 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const REPOSITORY_URL = "https://github.com/dzhng/relay-pi.git";
 const E2B_REQUEST_TIMEOUT_MS = 180_000;
 
-/** Build the immutable x86 Docker worker image used by an E2B campaign. */
+/** 构建 E2B 测试活动使用的不可变 x86 Docker worker 镜像。 */
 export async function buildSwebenchTemplate(): Promise<{
   name: string;
   templateId?: string;

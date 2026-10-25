@@ -5,12 +5,10 @@ import type { TransportName } from "../model-resolution/catalog.js";
 import type { ModelUsageEntry, TurnTokenUsage } from "../types/protocol.js";
 
 /**
- * Returns a new `TurnTokenUsage` equal to `a + b`, treating either operand
- * being `undefined` as the empty usage.
+ * 返回一个新的 `TurnTokenUsage`，其值等于 `a + b`；任一操作数为 `undefined` 时视为空用量。
  *
- * Pure function: callers must use the return value. Earlier in-place semantics
- * led to call sites that discarded the return and relied on the accumulator
- * being mutated through a shared reference, which made the contract subtle.
+ * 纯函数：调用方必须使用返回值。早期的原地语义导致某些调用点丢弃返回值，却依赖通过共享
+ * 引用修改累加器，使契约变得隐晦。
  */
 export function addUsage(
   a: TurnTokenUsage | undefined,
@@ -36,12 +34,10 @@ export function addUsage(
 }
 
 /**
- * Returns a new per-model usage breakdown equal to `list` with `usage`
- * folded into the entry for `model` (summed via {@link addUsage}, appended
- * when the model is not present yet). Pure: never mutates `list`. A falsy
- * `usage` returns a cloned copy of `list` unchanged, so the invariant
- * `sum(result[].usage.cost.total) === addUsage(turnUsage, usage).cost.total`
- * holds whenever the same `usage` is also folded into the turn aggregate.
+ * 返回一个新的按 model 划分的用量明细：将 `usage` 合并到 `model` 的条目中（通过 {@link addUsage}
+ * 求和；model 尚不存在时追加）。纯函数：永不修改 `list`。falsy 的 `usage` 会返回 `list` 的
+ * 未改变副本，因此只要同一 `usage` 也被合并到回合总量，就能保持不变量
+ * `sum(result[].usage.cost.total) === addUsage(turnUsage, usage).cost.total`。
  */
 export function addUsageByModel(
   list: readonly ModelUsageEntry[] | undefined,
@@ -86,13 +82,11 @@ function cloneUsage(usage: TurnTokenUsage): TurnTokenUsage {
 }
 
 /**
- * Sums `Usage` across every assistant message that carries one. Returns
- * `undefined` when no assistant message contributed, so callers can
- * distinguish "no usage yet" from "zero usage."
+ * 汇总每条携带用量的 assistant 消息中的 `Usage`。如果没有 assistant 消息贡献用量则返回
+ * `undefined`，这样调用方可以区分“尚无用量”和“用量为零”。
  *
- * pi-ai populates `usage` per assistant LLM call; there is no aggregate
- * end-of-turn signal from pi, so summing per-message is the canonical
- * total-usage path for a turn.
+ * pi-ai 会为每次 assistant LLM 调用填充 `usage`；pi 没有回合结束时的聚合信号，因此按消息
+ * 求和是回合总用量的规范路径。
  */
 export function usageFromMessages(messages: readonly AgentMessage[]): TurnTokenUsage | undefined {
   let usage: TurnTokenUsage | undefined;

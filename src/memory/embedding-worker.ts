@@ -5,111 +5,78 @@ import type { EmbedFn } from "./embedding.js";
 import type { MemorySession } from "./session.js";
 
 /**
- * Background worker that fills missing embeddings. Started by
- * `loadStoredMemory()` to drain any backlog left by prior runs, then
- * event-driven: it stops once the backlog is empty and is re-kicked by
- * the storage write helpers when new observations land. Never blocks a
- * turn: the observer/reflector can write a new row and return to the
- * user immediately; the embedding lands within seconds in the
- * background, after which the row becomes hybrid-retrievable.
+ * 填充缺失 embedding 的后台 worker。由 `loadStoredMemory()` 启动，用来排空之前运行留下的 backlog；之后由 event 驱动：
+ * backlog 为空时停止，新的 observation 写入时由 storage write helper 重新 kick。绝不会阻塞
+ * 回合：observer/reflector 可以写入新 row 后立即返回用户；embedding 在后台数秒内落库，
+ * 之后该 row 就能通过 hybrid 检索。
+ * 排空形状：
+ *   1. 将未 embedding 的 row 按 `BATCH_SIZE` 分块排空，每个 chunk 使用自己的 `withDb`，直到 select 返回零 row。
+ *      batch 之间 worker 调用 `relinquish()` 释放 memory Session——现在关闭 handle 并释放跨进程
+ *      `.relay-pi-open.lock`，而不是等 idle-close timer——然后短暂暂停，让等待打开同一 memory.db 的
+ *      peer relay-pi 进程先获得 lock，再由 worker 为下一批重新获取。这样 worker 不会在（可能很多批的）
+ *      排空期间饿死前台 Session 的 turn-init。代价是 backlog 活跃排空时每批重新打开一次 WASM；
+ *      这是短暂的后台工作，不同于下面刻意避免的永久 idle tick。
+ *   2. 如果排空结果为空且期间没有收到 `kick()`，退出循环。刻意避免永久 idle tick：Session idle-close
+ *      后每个 tick 都会重新打开一次 WASM Postgres；多个 Session 停在 sandbox 中时，这会让常驻 CLI
+ *      持续消耗约 8% CPU。
+ *   3. 如果唯一的未 embedding row 处于 per-id attempt cooldown，则在 `ATTEMPT_COOLDOWN_MS` 后重试，
+ *      而不是退出，使 churn 的 row 最终仍会重新 embedding。
+ *   4. 出错时（rate limit、transient network），等待 `ERROR_SLEEP_MS` 后退避重试。lock-busy 的
+ *      `withDb` skip 在 `RETRY_SLEEP_MS` 后重试。
  *
- * Drain shape:
- *   1. Drain unembedded rows in `BATCH_SIZE` chunks, each chunk in its
- *      own `withDb`, until a select returns zero rows. Between batches
- *      the worker `relinquish()`es the memory session — closing the
- *      handle and releasing the cross-process `.relay-pi-open.lock` now
- *      rather than after the idle-close timer — then pauses briefly so a
- *      peer relay-pi process waiting to open the same memory.db can take the
- *      lock before this worker re-acquires it for the next batch. This
- *      keeps the worker from starving a foreground session's turn-init
- *      for the whole (potentially many-batch) drain. The trade is one
- *      WASM reopen per batch while a backlog is actively draining; that
- *      is transient background work, unlike the perpetual idle tick
- *      guarded against below.
- *   2. If the drain came back empty and no `kick()` arrived meanwhile,
- *      the loop exits. A perpetual idle tick is deliberately avoided:
- *      each tick re-opens WASM Postgres once the session idle-closes,
- *      which burned a steady ~8% CPU per resident CLI when several
- *      sessions sat parked in a sandbox.
- *   3. When the only unembedded rows are inside the per-id attempt
- *      cooldown, retry after `ATTEMPT_COOLDOWN_MS` instead of exiting
- *      so a churned row still gets re-embedded eventually.
- *   4. On error (rate limit, transient network), back off for
- *      `ERROR_SLEEP_MS` before retrying. A lock-busy `withDb` skip
- *      retries after `RETRY_SLEEP_MS`.
- *
- * Failure modes are local: any error inside the loop logs and resumes
- * after a backoff. The worker never throws to the caller.
+ * 失败局部处理：循环内任何错误都会记录日志，并在退避后恢复。worker 绝不会向调用方抛出错误。
  */
 const BATCH_SIZE = 50;
 const DEFAULT_RETRY_SLEEP_MS = 10_000;
 const DEFAULT_ERROR_SLEEP_MS = 60_000;
-// Pause between drain batches after the worker relinquishes the
-// cross-process lock, giving a peer relay-pi process that is polling for the
-// same memory.db a window to acquire it before this worker re-opens for
-// the next batch. Small relative to a real embedding batch (a network
-// round-trip) so it barely affects drain throughput, yet wide enough to
-// overlap a fresh peer's early poll backoff (pollAcquireOpenLock starts
-// at 50/100/200/400ms) — the case that matters in production, where the
-// contending peer is a just-launched session's turn-init. It does not
-// guarantee a hit for a peer already deep in the ~1000ms backoff ceiling
-// (that backoff never resets), but each batch reopens the window, so no
-// peer is starved for the whole drain. Tests that need a hard per-cycle
-// guarantee widen this past 1000ms via `interBatchYieldMs`.
+// worker 释放跨进程 lock 后，在 drain batch 之间暂停，让轮询同一 memory.db 的 peer relay-pi 进程
+// 有机会在 worker 为下一批重新打开前获取 lock。相对于真实 embedding batch（一次 network
+// round-trip）很短，几乎不影响排空吞吐，但足够与新 peer 的早期 poll backoff 重叠
+//（pollAcquireOpenLock 从 50/100/200/400ms 开始）——这正是生产环境中刚启动 Session 的
+// turn-init 竞争者所需的场景。它无法保证已经深入约 1000ms backoff 上限的 peer 命中
+//（该 backoff 不会重置），但每批都会重新打开窗口，因此不会让 peer 在整个排空期间饿死。
+// 需要每周期硬保证的测试可通过 `interBatchYieldMs` 将此值增大到 1000ms 以上。
 const DEFAULT_INTER_BATCH_YIELD_MS = 250;
-// Cap how often a single observation may be re-embedded. The production
-// memory store can churn rows (the reflector deletes and re-inserts a
-// session's observations, which cascade-deletes their embeddings). If
-// the embedding row vanishes between drains we should re-embed at
-// most once per cooldown rather than running an unbounded hot loop
-// over the same ids.
+// 限制单条 observation 重新 embedding 的频率。生产 memory store 可能 churn row（reflector
+// 删除并重新插入 Session 的 observation，同时级联删除其 embedding）。如果 embedding row
+// 在两次 drain 之间消失，应每个 cooldown 最多重新 embedding 一次，而不是在相同 id 上
+// 运行无界的 hot loop。
 const DEFAULT_ATTEMPT_COOLDOWN_MS = 5 * 60_000;
-// Snippet length for embedding-failure log lines. The remote endpoint
-// occasionally responds with a full HTML page when misrouted (404 from
-// the marketing site) and dumping the whole body fills the log with
-// tens of kilobytes per failure.
+// embedding-failure 日志行的片段长度。remote endpoint 偶尔会在路由错误时返回完整 HTML 页面
+//（marketing site 的 404）；直接 dump 整个 body 会让每次失败的日志增加几十 KB。
 const ERROR_BODY_LOG_MAX = 200;
 
 export interface EmbeddingBackfillWorkerOptions {
-  /** Memory session owning the PGlite handle and cross-process lock. */
+  /** 拥有 PGlite handle 和跨进程 lock 的 Memory Session。 */
   session: MemorySession;
-  /** Embedding callable. Defaults to the OpenRouter client; tests inject a stub. */
+  /** embedding callable。默认使用 OpenRouter client；测试注入 stub。 */
   embed: EmbedFn;
-  /** Path to append progress lines to. Optional; when omitted the worker logs nothing. */
+  /** 追加 progress 行的路径。可选；省略时 worker 不记录日志。 */
   logPath?: string;
   /**
-   * Delay before retrying a drain that could not run because the
-   * cross-process lock was busy, in milliseconds. Defaults to 10s,
-   * which gives the peer relay-pi CLI holding the lock room to finish.
+   * 因跨进程 lock 忙而无法执行 drain 时的重试延迟（毫秒）。默认为 10s，
+   * 给持有 lock 的 peer relay-pi CLI 留出完成空间。
    */
   retrySleepMs?: number;
   /**
-   * Backoff after a failed drain in milliseconds. Defaults to 60s.
-   * Tests override this so a transient-error case does not block the
-   * suite for a full minute.
+   * drain 失败后的退避时间（毫秒）。默认为 60s。
+   * 测试会覆盖此值，以免 transient-error case 阻塞整个 suite 一分钟。
    */
   errorSleepMs?: number;
   /**
-   * Minimum time between re-embed attempts for the same observation
-   * id, in milliseconds. Defaults to 5 minutes. Caps unbounded
-   * re-embedding when something (typically the reflector's
-   * delete-and-reinsert cycle) keeps wiping a row's embedding behind
-   * the worker's back.
+   * 同一 observation id 两次 re-embed attempt 的最短间隔（毫秒）。默认为 5 分钟。
+   * 当某项工作（通常是 reflector 的 delete-and-reinsert cycle）持续在 worker 之后清除
+   * row 的 embedding 时，限制无界的重新 embedding。
    */
   attemptCooldownMs?: number;
   /**
-   * Pause between drain batches, in milliseconds, after the worker
-   * relinquishes the cross-process lock so a waiting peer relay-pi process
-   * can acquire it before the next batch re-opens. Defaults to 250ms.
-   * Tests override this to keep the suite fast.
+   * worker 释放跨进程 lock 后两次 drain batch 之间的暂停时间（毫秒），让等待的 peer relay-pi
+   * 进程在下一批重新打开之前获得 lock。默认为 250ms。测试会覆盖此值以保持 suite 快速。
    */
   interBatchYieldMs?: number;
   /**
-   * Maximum size of the live log file in bytes before it is rotated
-   * to `<logPath>.1` (replacing any prior rotation). Defaults to 1 MB.
-   * Each call to `log` checks the current size first and rotates
-   * before appending, so a chronic failure cannot grow the log without
-   * bound.
+   * live log 文件在轮转到 `<logPath>.1`（替换之前的轮转文件）前的最大字节数。默认为 1 MB。
+   * 每次调用 `log` 都会先检查当前大小，轮转后再追加，因此长期失败不会无限增长日志。
    */
   logMaxBytes?: number;
 }
@@ -123,23 +90,19 @@ export class EmbeddingBackfillWorker {
   private readonly attemptCooldownMs: number;
   private readonly interBatchYieldMs: number;
   private readonly logMaxBytes: number;
-  // Per-id record of the last attempt timestamp. selectBatch filters
-  // out ids attempted within the cooldown, breaking the hot loop when
-  // a row's embedding keeps disappearing between drains. Entries are
-  // purged lazily as they expire.
+  // 每个 id 记录上次 attempt 的时间戳。selectBatch 会过滤 cooldown 内尝试过的 id，
+  // 从而在 row 的 embedding 持续在 drain 之间消失时打破 hot loop。条目过期后惰性清理。
   private readonly recentAttempts = new Map<string, number>();
   private abortController?: AbortController;
   private runningPromise?: Promise<void>;
-  // Set by `kick()` while a drain is in flight so the loop runs one
-  // more drain instead of exiting on an empty result, closing the race
-  // where a write lands between the final select and the loop exit.
+  // drain 进行期间由 `kick()` 设置，使循环在空结果上不退出，而是再 drain 一次，关闭 write
+  // 发生在最终 select 与循环退出之间的 race。
   private pendingKick = false;
-  // Resolver for the currently in-flight backoff sleep, when any.
-  // `kick()` invokes it so a new write cuts a cooldown/retry/error
-  // backoff short instead of waiting it out.
+  // 当前 in-flight backoff sleep（如果有）的 resolver。`kick()` 会调用它，使新写入缩短
+  // cooldown/retry/error backoff，而不是等待完毕。
   private wakeFromSleep?: () => void;
-  // Set by `stop()` so a late `kick()` (a write racing dispose) cannot
-  // restart the loop against a session that is about to close.
+  // 由 `stop()` 设置，使较晚到达的 `kick()`（与 dispose 竞争的 write）无法针对即将关闭的
+  // Session 重新启动循环。
   private stopped = false;
 
   constructor(options: EmbeddingBackfillWorkerOptions) {
@@ -151,7 +114,7 @@ export class EmbeddingBackfillWorker {
     this.logMaxBytes = options.logMaxBytes ?? DEFAULT_LOG_MAX_BYTES;
   }
 
-  /** Start a drain loop. Idempotent — a second call while running is a no-op. */
+  /** 启动 drain loop。幂等——运行期间再次调用不会产生任何操作。 */
   start(): void {
     if (this.runningPromise) return;
     this.stopped = false;
@@ -161,17 +124,14 @@ export class EmbeddingBackfillWorker {
       if (this.abortController !== controller) return;
       this.runningPromise = undefined;
       this.abortController = undefined;
-      // A kick that landed between the loop's final empty-drain check
-      // and this cleanup would otherwise be lost; restart to honor it.
+      // 如果 kick 在 loop 最后的空 drain 检查与此 cleanup 之间到达，否则会丢失；重启以兑现它。
       if (this.pendingKick && !controller.signal.aborted) this.start();
     });
   }
 
   /**
-   * Signal that new observations were written. Restarts the drain loop
-   * if it has exited, or schedules one more drain (and cuts any backoff
-   * sleep short) if it is still running. Called by the storage write
-   * helpers via `MemorySession.onWrite`.
+   * 发送新 observation 已写入的信号。如果 drain loop 已退出则重启；如果仍在运行，则安排
+   * 再次 drain（并缩短 backoff sleep）。由 storage write helper 通过 `MemorySession.onWrite` 调用。
    */
   kick(): void {
     if (this.stopped) return;
@@ -184,16 +144,14 @@ export class EmbeddingBackfillWorker {
   }
 
   /**
-   * Stop the loop and wait for the in-flight tick (if any) to settle.
-   * Because each tick awaits a `session.withDb`, this transitively waits
-   * for any open the worker holds to drain and the lock to release.
+   * 停止循环，并等待 in-flight tick（如果有）结算。
+   * 由于每个 tick 都等待 `session.withDb`，这会传递地等待 worker 持有的 open 排空并释放 lock。
    */
   async stop(): Promise<void> {
     this.stopped = true;
     this.abortController?.abort();
-    // The finally attached in start() clears abortController and
-    // runningPromise once the loop settles, so awaiting is all the
-    // cleanup stop needs.
+    // start() 中附加的 finally 会在循环结算后清除 abortController 和 runningPromise，因此等待
+    // 本身就是 stop 所需的全部 cleanup。
     await this.runningPromise;
   }
 
@@ -207,10 +165,8 @@ export class EmbeddingBackfillWorker {
           if (!this.pendingKick) return;
           continue;
         }
-        // "cooling": the only unembedded rows were attempted recently —
-        // retry once the cooldown can have expired. "lock-busy": the
-        // cross-process lock could not be acquired within the budget —
-        // retry after a short sleep so the peer holding it can finish.
+        // “cooling”：唯一的未 embedding row 最近才尝试过——等 cooldown 可能到期后再重试。
+        // “lock-busy”：预算内无法获取跨进程 lock——短暂 sleep 后重试，让持有 lock 的 peer 完成。
         await this.sleep(
           outcome === "cooling" ? this.attemptCooldownMs : this.retrySleepMs,
           signal,
@@ -224,21 +180,17 @@ export class EmbeddingBackfillWorker {
   }
 
   /**
-   * Drain the backlog one `BATCH_SIZE` chunk at a time, each chunk in its
-   * own `withDb`. Between batches the worker relinquishes the memory
-   * session and pauses so a peer relay-pi process is not starved for the
-   * whole drain (see the class doc). Returns "drained" when the backlog
-   * is empty, "cooling" when the only remaining rows are inside the
-   * attempt cooldown, or "lock-busy" when the cross-process lock could
-   * not be acquired for a batch.
+   * 每次处理一个 `BATCH_SIZE` chunk 排空 backlog，每个 chunk 使用自己的 `withDb`。batch 之间
+   * worker 释放 memory Session 并暂停，避免 peer relay-pi 进程在整个 drain 期间饿死（见类文档）。
+   * backlog 为空时返回 "drained"；唯一剩余 row 处于 attempt cooldown 时返回 "cooling"；
+   * 某批无法获取跨进程 lock 时返回 "lock-busy"。
    */
   private async drainInBatches(signal: AbortSignal): Promise<"drained" | "cooling" | "lock-busy"> {
     let first = true;
     while (!signal.aborted) {
       if (!first) {
-        // Release the cross-process lock now (rather than waiting out the
-        // idle-close timer) and pause so a polling peer can take it
-        // before this worker re-opens for the next batch.
+        // 现在释放跨进程 lock（而不是等 idle-close timer），并暂停，让轮询中的 peer 在 worker
+        // 为下一批重新打开前获取 lock。
         await this.options.session.relinquish();
         await this.sleep(this.interBatchYieldMs, signal);
         if (signal.aborted) return "drained";
@@ -246,8 +198,7 @@ export class EmbeddingBackfillWorker {
       first = false;
       const outcome = await this.options.session.withDb((db) => this.drainBatch(db));
       if (signal.aborted) return "drained";
-      // `undefined` means the lock could not be acquired within the
-      // budget; surface it so the caller backs off and retries.
+      // `undefined` 表示在预算内无法获取 lock；向调用方返回，让它退避并重试。
       if (outcome === undefined) return "lock-busy";
       if (outcome === "more") continue;
       return outcome;
@@ -256,19 +207,14 @@ export class EmbeddingBackfillWorker {
   }
 
   /**
-   * Embed on an already-open handle until either a *full* batch was
-   * written — meaning more backlog is likely, so we return "more" and let
-   * the caller relinquish the lock before re-opening for the next batch —
-   * or the backlog is exhausted, returning the terminal status
-   * ("drained"/"cooling").
+   * 在已经打开的 handle 上执行 embedding，直到写入一个完整 batch——这通常意味着还有 backlog，
+   * 因此返回 "more"，让调用方在为下一批重新打开前释放 lock——或 backlog 耗尽，返回 terminal
+   * 状态（"drained"/"cooling"）。
    *
-   * A *partial* batch (fewer than `BATCH_SIZE` rows) means no more
-   * non-excluded rows remain, so the terminal check runs in this same
-   * open rather than re-opening for a near-certainly-empty select. This
-   * keeps a single-batch drain atomic (it resolves without ever yielding
-   * the event loop), so an un-kicked write that lands right after the
-   * drain is not swept in by a follow-on select — only full multi-batch
-   * drains yield the cross-process lock between batches.
+   * 部分 batch（少于 `BATCH_SIZE` row）表示没有更多未排除 row，因此在同一次 open 中执行
+   * terminal 检查，而不为几乎必空的 select 重新打开。这样单批 drain 保持 atomic（从不让出
+   * event loop），所以 drain 刚结束后、尚未 kick 的 write 不会被后续 select 扫入——只有完整的
+   * multi-batch drain 会在 batch 之间让出跨进程 lock。
    */
   private async drainBatch(db: PGlite): Promise<"more" | "drained" | "cooling"> {
     while (true) {
@@ -276,26 +222,20 @@ export class EmbeddingBackfillWorker {
       if (batch.length === 0) {
         return (await this.hasCooledBacklog(db)) ? "cooling" : "drained";
       }
-      // Stamp the attempt before we await the embedding so a failure
-      // mid-call still counts as an attempt and the same ids do not get
-      // retried in a tight loop on the next drain.
+      // 在等待 embedding 之前记录 attempt，因此即使调用中途失败也算一次 attempt，
+      // 相同 id 不会在下一次 drain 中被紧密循环重试。
       const attemptAt = Date.now();
       for (const row of batch) this.recentAttempts.set(row.id, attemptAt);
       await embedAndPersistObservations(db, batch, this.options.embed);
       this.log(`Embedded ${batch.length} observations`);
-      // Full batch: yield the lock before draining the next one.
+      // 完整 batch：在排空下一批前让出 lock。
       if (batch.length >= BATCH_SIZE) return "more";
-      // Partial batch: fall through to resolve the terminal state in the
-      // same open.
+      // 部分 batch：在同一次 open 中继续解析 terminal state。
     }
   }
 
-  /**
-   * True when unembedded rows exist that `selectBatch` could not see
-   * because every one of them is inside the attempt cooldown. Only
-   * worth querying when the cooldown exclusion list is non-empty — an
-   * empty list means the empty batch already proved a full drain.
-   */
+  /** 当存在未 embedding row 且 `selectBatch` 因每条都处于 attempt cooldown 而看不到它们时为 true。
+   * 只有 exclusion list 非空时才值得查询——空 list 表示空 batch 已经证明 backlog 全部排空。 */
   private async hasCooledBacklog(db: PGlite): Promise<boolean> {
     if (this.collectCooledIds().length === 0) return false;
     const result = await db.query<{ pending: boolean }>(
@@ -308,7 +248,7 @@ export class EmbeddingBackfillWorker {
     return result.rows[0]?.pending ?? false;
   }
 
-  /** Backoff sleep that resolves early on abort or on `kick()`. */
+  /** 在 abort 或 `kick()` 时提前结束的 backoff sleep。 */
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve) => {
       if (signal.aborted || this.pendingKick) {
@@ -328,14 +268,11 @@ export class EmbeddingBackfillWorker {
   }
 
   private async selectBatch(db: PGlite): Promise<{ id: string; content: string }[]> {
-    // LEFT JOIN over the embeddings table is the cheapest way to pick
-    // rows with no embedding yet. The composite index on
-    // (kind, priority, created_at DESC) carries the ORDER BY without a
-    // separate sort.
+    // 对 embeddings 表做 LEFT JOIN 是找出尚无 embedding 的 row 的最低成本方式。复合 index
+    //（kind、priority、created_at DESC）直接承担 ORDER BY，无需单独排序。
     //
-    // The exclusion list comes from `recentAttempts` and caps how
-    // often the worker may retry the same id, even if its embedding
-    // row keeps being cascade-deleted between drains.
+    // exclusion list 来自 `recentAttempts`，限制 worker 重试同一 id 的频率，即使其 embedding
+    // row 在两次 drain 之间持续被级联删除。
     const excludedIds = this.collectCooledIds();
     const result = await db.query<{ id: string; content: string }>(
       `SELECT o.id, o.content
@@ -352,10 +289,7 @@ export class EmbeddingBackfillWorker {
     return result.rows;
   }
 
-  /**
-   * Return the ids currently inside the attempt-cooldown window and
-   * forget anything older so the map cannot grow unbounded.
-   */
+  /** 返回当前位于 attempt-cooldown 窗口内的 id，并忘掉更旧的条目，防止 map 无界增长。 */
   private collectCooledIds(): string[] {
     const now = Date.now();
     const cutoff = now - this.attemptCooldownMs;
@@ -375,55 +309,42 @@ export class EmbeddingBackfillWorker {
     if (!logPath) return;
     try {
       mkdirSync(dirname(logPath), { recursive: true });
-      // Rotate before appending so the live file never exceeds the
-      // cap by more than one line. The single `.1` rotation keeps the
-      // most recent overflow available for post-mortem without
-      // accumulating an unbounded ring of files.
+      // 追加前轮转，使 live 文件最多超过上限一行。单个 `.1` rotation 保留最近的 overflow
+      // 供 post-mortem 使用，同时不累积无界的文件 ring。
       try {
         if (statSync(logPath).size >= this.logMaxBytes) {
           renameSync(logPath, `${logPath}.1`);
         }
       } catch {
-        // No existing file or stat failed; appendFileSync will create.
+        // 没有现有文件，或 stat 失败；appendFileSync 会创建文件。
       }
-      // Include the pid so multi-CLI runs (which share the log file
-      // via the same HOME-backed `.relay-pi/logs/` path) can be
-      // disambiguated. Each appendFileSync call writes a single line
-      // well under PIPE_BUF, so O_APPEND keeps lines from different
-      // processes intact even when they interleave.
+      // 写入 pid，使多 CLI 运行可以区分（它们通过同一个由 HOME 支持的 `.relay-pi/logs/` 路径
+      // 共享日志文件）。每次 appendFileSync 只写入一行，远小于 PIPE_BUF，因此 O_APPEND 即使
+      // 进程交错写入，也能保持不同进程的行完整。
       appendFileSync(
         logPath,
         `[${new Date().toISOString()} pid=${process.pid}] ${message}\n`,
         "utf8",
       );
     } catch {
-      // Logging is best-effort; failures here must not bring the worker
-      // down. The next batch's logs will retry the directory create.
+      // 日志尽力而为；这里失败不能让 worker 停止。下一批日志会重试创建目录。
     }
   }
 }
 
 /**
- * Embed `rows` and upsert their `observation_embeddings` rows on the
- * given open handle. Shared by the worker's drain loop, the synchronous
- * insert-time embed in `appendObservation`, and the startup catch-up
- * pass in `loadStoredMemory`. Throws when the embed call fails or
- * returns a mismatched vector count; callers decide whether that is
- * fatal (the worker logs and backs off, insert-time callers degrade to
- * the async backfill).
+ * 在给定的 open handle 上 embedding `rows`，并 upsert 其 `observation_embeddings` row。
+ * worker drain loop、`appendObservation` 的同步 insert-time embed，以及 `loadStoredMemory` 的
+ * startup catch-up pass 共用此函数。embed 调用失败或 vector 数量不匹配时抛出；调用方决定
+ * 是否致命（worker 记录日志并退避，insert-time caller 退化到异步 backfill）。
  *
- * The upsert runs in one transaction so a partial write failure does
- * not leave the embeddings table half-populated relative to `rows`.
- * `model` is stored verbatim as reported by the server so a future
- * re-embedding pass can match the deprecated tag and refresh only the
- * affected rows.
+ * upsert 在一个 transaction 中运行，因此部分写入失败不会让 embeddings 表相对 `rows` 处于
+ * 半填充状态。`model` 按 server 报告的原值存储，以便未来 re-embedding pass 匹配已弃用的
+ * tag，仅刷新受影响的 row。
  *
- * No FK exists between `observation_embeddings` and `observations`
- * (migration 7 dropped the cascade), so a bare INSERT is safe even if
- * the parent row was deleted after it was selected. Any resulting
- * orphan embedding is harmless — the recall path JOINs back to
- * `observations` and filters orphans out — and it survives a same-id
- * reinsert without forcing a re-embed.
+ * `observation_embeddings` 与 `observations` 之间没有 FK（migration 7 删除了 cascade），
+ * 因此即使 parent row 在选中后被删除，裸 INSERT 也安全。产生的 orphan embedding 无害——
+ * recall path 会 JOIN 回 `observations` 并过滤 orphan——且同 id reinsert 时仍会保留，无需重新 embedding。
  */
 export async function embedAndPersistObservations(
   db: PGlite,
@@ -456,17 +377,12 @@ export async function embedAndPersistObservations(
 }
 
 /**
- * One bounded catch-up pass over the embedding backlog: embed the
- * newest `limit` observations that have no embedding row yet. Run by
- * `loadStoredMemory` before the first turn dispatches so rows written
- * by embed-less flows (`relay-pi memory add` / `relay-pi train` while
- * embeddings were unavailable, or from an older CLI) are
- * vector-recallable immediately instead of whenever the async worker
- * gets to them. Newest-first because fresh rows are the ones a
- * first-turn recall is most likely to target; the worker owns the rest
- * of the backlog. Returns the number of rows embedded (0 when the
- * cross-process lock could not be acquired). Throws on embed failure —
- * callers treat the pass as best-effort.
+ * 对 embedding backlog 做一次有界 catch-up：为尚无 embedding row 的最新 `limit` 条 observation
+ * 做 embedding。由 `loadStoredMemory` 在第一次 dispatch 前运行，使无 embedding 的流程
+ *（embedding 不可用时的 `relay-pi memory add` / `relay-pi train`，或旧版 CLI 写入的 row）
+ * 能立即进行 vector recall，而不是等异步 worker 处理到它们。按最新优先，因为新 row 最可能
+ * 被首回合 recall 命中；其余 backlog 由 worker 负责。返回 embedding 的 row 数量（跨进程 lock
+ * 无法获取时为 0）。embed 失败时抛出——调用方会将该 pass 视为 best-effort。
  */
 export async function backfillNewestEmbeddings(
   session: MemorySession,
@@ -489,21 +405,14 @@ export async function backfillNewestEmbeddings(
   return embedded ?? 0;
 }
 
-/**
- * pgvector accepts text-format literals like `[1,2,3]` for INSERT.
- * Using the text path keeps us off the binary protocol that PGlite's
- * client surface does not expose for vectors.
- */
+/** pgvector 接受 `[1,2,3]` 这类 text-format literal 进行 INSERT。
+ * 使用 text 路径可以避开 PGlite client surface 未暴露的 vector binary protocol。 */
 function formatVector(values: number[]): string {
   return `[${values.join(",")}]`;
 }
 
-/**
- * Render an error for the worker log without dumping multi-kilobyte
- * HTML bodies. The embedding endpoint can respond with a full Next.js
- * 404 page (over 50KB) when misrouted, and the raw message would
- * otherwise be appended verbatim on every retry.
- */
+/** 为 worker 日志渲染错误，但不 dump 多 KB 的 HTML body。embedding endpoint 路由错误时可能
+ * 返回完整的 Next.js 404 页面（超过 50KB），否则 raw message 会在每次 retry 时逐字追加。 */
 function summarizeError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const collapsed = raw

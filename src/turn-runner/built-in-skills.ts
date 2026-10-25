@@ -3,27 +3,23 @@ import type { Skill } from "@earendil-works/pi-coding-agent";
 import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 
 /**
- * Synthetic marker prefix for built-in skill `filePath`/`baseDir`. Real
- * skills live under a discoverable `baseDir` on disk; built-ins ship
- * inside the package, so the prefix is a virtual sentinel that keeps
- * their paths from colliding with anything on the filesystem and gives
- * humans a clear hint when they appear in logs or `relay-pi skills` output.
- * Built-in detection itself goes through the `BUILT_IN_BY_PATH` map, not
- * a prefix match.
+ * 内置 skill 的 `filePath`/`baseDir` 使用的合成标记前缀。真实 skill 位于磁盘上可发现的
+ * `baseDir` 下；内置 skill 随包发布，因此此前缀是一个虚拟哨兵，既能避免其路径与文件系统中的
+ * 任何内容冲突，也能在日志或 `relay-pi skills` 输出中为人类提供清晰提示。
+ * 内置 skill 的检测本身通过 `BUILT_IN_BY_PATH` 映射进行，而不是匹配前缀。
  */
 const BUILTIN_PATH_PREFIX = "<relay-pi-builtin>";
 
 export interface BuiltInSkill {
-  /** Skill metadata exposed through the standard discovery API. */
+  /** 通过标准发现 API 暴露的 skill 元数据。 */
   skill: Skill;
-  /** Inline SKILL.md body. Returned by `readSkillInstructions`. */
+  /** 内联的 SKILL.md 正文。由 `readSkillInstructions` 返回。 */
   instructions: string;
 }
 
 /**
- * Body of the built-in `/relay` skill. Renders into the prompt verbatim
- * inside the standard `<skill>` wrapper when the user types `/relay`
- * anywhere in their message.
+ * 内置 `/relay` skill 的正文。用户在消息中任意位置输入 `/relay` 时，
+ * 它会在标准 `<skill>` 包装器内原样渲染到提示词中。
  */
 const RELAY_INSTRUCTIONS = dedent`
   The user requested relay mode for this prompt. Strongly prefer the
@@ -123,9 +119,8 @@ const RELAY_DESCRIPTION =
   "Run durable, multi-step, or recurring work as a state machine of sub-agent, script, poll, and timer states so the work survives session boundaries and progress stays visible to the user.";
 
 /**
- * Body of the built-in `/goal` skill. A reference pattern, not a prebuilt
- * machine: it teaches the agent to build its own work/evaluate loop so
- * the definition, criteria, and state names fit the goal at hand.
+ * 内置 `/goal` skill 的正文。它是参考模式而非预构建的 machine：用于教 Agent
+ * 构建自己的工作/评估循环，使定义、条件和 state 名称符合当前目标。
  */
 const GOAL_INSTRUCTIONS = dedent`
   The user gave you a goal to drive to completion, not a task to perform
@@ -240,10 +235,9 @@ function buildBuiltIn(
   description: string,
   instructions: string,
   /**
-   * Hides the skill from the advertised skill list, so it activates only when
-   * the user types `/name` or a state prompt names it. Use it for a skill whose
-   * pattern is already reachable through another skill's body: advertising both
-   * makes the model choose between two overlapping menu entries every turn.
+   * 隐藏 skill，使其仅在用户输入 `/name` 或某个 state 的 prompt 命名它时激活。
+   * 对于其模式已经可通过另一个 skill 的正文触达的 skill，应使用此选项：同时展示两者
+   * 会让模型每回合都在两个重叠的菜单项之间进行选择。
    */
   disableModelInvocation = false,
 ): BuiltInSkill {
@@ -268,15 +262,13 @@ function buildBuiltIn(
 }
 
 /**
- * Registry of built-in skills shipped with the turn runner. They appear
- * in skill discovery alongside user/project skills and can be shadowed
- * by a same-named skill installed under any discovery root.
+ * 运行器随附的内置 skill 注册表。它们会与用户/项目 skill 一起出现在 skill 发现结果中，
+ * 并可被安装在任意发现根目录下的同名 skill 覆盖。
  */
 export const BUILT_IN_SKILLS: readonly BuiltInSkill[] = [
   buildBuiltIn("relay", RELAY_DESCRIPTION, RELAY_INSTRUCTIONS),
-  // User-invoked only: `/relay` carries the goal loop's shape, so the model
-  // reaches this pattern through relay rather than picking between two
-  // state-machine skills on its own.
+  // 仅由用户调用：`/relay` 携带 goal 循环的结构，因此模型通过 relay 触达此模式，
+  // 而不是自行在两个 state machine skill 之间进行选择。
   buildBuiltIn("goal", GOAL_DESCRIPTION, GOAL_INSTRUCTIONS, true),
 ];
 
@@ -285,9 +277,8 @@ const BUILT_IN_BY_PATH = new Map(
 );
 
 /**
- * Return the in-memory SKILL.md body for a built-in skill, or `undefined`
- * when the skill is not a built-in (so the caller can fall back to
- * reading from disk).
+ * 返回内置 skill 的内存中 SKILL.md 正文；如果该 skill 不是内置 skill，则返回 `undefined`
+ * （调用方可以回退到从磁盘读取）。
  */
 export function getBuiltInSkillInstructions(filePath: string): string | undefined {
   return BUILT_IN_BY_PATH.get(filePath);
@@ -297,7 +288,7 @@ export function isBuiltInSkill(skill: Skill): boolean {
   return BUILT_IN_BY_PATH.has(skill.filePath);
 }
 
-/** Snapshot of built-in skills as plain `Skill` records for merging into discovery results. */
+/** 将内置 skill 快照为普通 `Skill` 记录，以便合并到发现结果中。 */
 export function listBuiltInSkills(): Skill[] {
   return BUILT_IN_SKILLS.map(({ skill }) => skill);
 }

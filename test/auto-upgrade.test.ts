@@ -36,7 +36,7 @@ let scratchHome: string | undefined;
 const GLOBAL_PATH = "/lib/node_modules/relay-pi/dist/src/cli.js";
 
 beforeEach(() => {
-  // Each test gets its own fake $HOME so .relay-pi/upgrade.lock writes never leak.
+  // 每个测试使用独立的伪造 $HOME，因此 .relay-pi/upgrade.lock 的写入不会泄漏。
   scratchHome = mkdtempSync(join(tmpdir(), "relay-pi-auto-upgrade-"));
   process.env.HOME = scratchHome;
 });
@@ -121,12 +121,12 @@ describe("cleanStaleStagingDirs", () => {
 
     expect(existsSync(stagingA)).toBe(false);
     expect(existsSync(stagingB)).toBe(false);
-    // The real package install dir is preserved — we only sweep staging dirs.
+    // 真实的软件包安装目录会保留——我们只清理暂存目录。
     expect(existsSync(agentDir)).toBe(true);
   });
 
   testIfDocker("is a no-op for source-checkout script paths", () => {
-    // No throw, no fs side effects.
+    // 不抛出异常，也没有文件系统副作用。
     __testing.cleanStaleStagingDirs("/Users/x/dev/relay-pi/src/cli.ts");
   });
 });
@@ -298,7 +298,7 @@ describe("runAutoUpgrade", () => {
         },
       });
       expect(final).toEqual({ kind: "skipped", reason: "memory-in-use" });
-      // Skipping must short-circuit before any registry probe or install.
+      // 跳过必须在任何 registry 探测或安装之前短路返回。
       expect(fetchCalled).toBe(false);
       expect(upgradeCalled).toBe(false);
     },
@@ -365,10 +365,10 @@ describe("defaultRunUpgrade spawn contract", () => {
       );
       expect(result).toEqual({ ok: true });
       expect(capturedOptions?.detached).toBe(true);
-      // stdin/stdout are dropped so the install does not bid for the TTY,
-      // and stderr is an inherited file descriptor (a number) rather than
-      // a pipe — a pipe's read end would close when the parent exits,
-      // delivering SIGPIPE to npm on the next stderr write.
+      // stdin/stdout 会被丢弃，因此安装不会争抢 TTY，
+      // 而 stderr 是继承的文件描述符（一个数字），而不是管道——
+      // 父进程退出时管道的读端会关闭，
+      // 导致 npm 下一次写入 stderr 时收到 SIGPIPE。
       const stdio = capturedOptions?.stdio as readonly unknown[];
       expect(stdio[0]).toBe("ignore");
       expect(stdio[1]).toBe("ignore");
@@ -379,9 +379,9 @@ describe("defaultRunUpgrade spawn contract", () => {
 
   testIfDocker("surfaces stderr from a failed install", async () => {
     const fakeSpawn = (_command: string, _args: string[], options: SpawnOptions): ChildProcess => {
-      // Mimic the real spawn contract: the package manager would write to
-      // the inherited stderr fd. We do the same so the runner can read it
-      // back after the failure exit.
+      // 模拟真实的 spawn 契约：软件包管理器会写入
+      // 继承的 stderr 文件描述符。这里也这样做，以便运行器能在
+      // 失败退出后读回它。
       const stdio = options.stdio as readonly unknown[];
       const errFd = stdio[2] as number;
       writeSync(errFd, "npm ERR! permission denied\n");
@@ -406,19 +406,19 @@ describe("defaultRunUpgrade spawn contract", () => {
 });
 
 describe("defaultRunUpgrade survives parent exit", () => {
-  // Regression: when the package manager's stderr was wired to a parent-
-  // owned pipe, a Ctrl+C on the relay-pi CLI closed the pipe's read end and
-  // SIGPIPE killed npm mid-install, leaving `relay-pi` missing from $PATH.
-  // Here we spawn a tiny parent process that starts a long-running fake
-  // "install" via defaultRunUpgrade, then kills the parent shortly after
-  // — and verify the install still completes after the parent is gone.
+  // 回归：软件包管理器的 stderr 接到父进程拥有的管道时，
+  // relay-pi CLI 收到 Ctrl+C 会关闭管道读端，
+  // SIGPIPE 会在 npm 安装过程中将其杀死，导致从 $PATH 中找不到
+  // `relay-pi`。这里生成一个小型父进程，让它通过 defaultRunUpgrade
+  // 启动一个长时间运行的伪造 "install"，随后很快杀死父进程，
+  // 并验证父进程退出后安装仍会完成。
   testIfDocker("a fake install finishes even after the parent process is killed", async () => {
     const workDir = mkdtempSync(join(tmpdir(), "relay-pi-upgrade-survive-"));
     try {
       const markerPath = join(workDir, "install-done");
       const installScript = join(workDir, "fake-install.sh");
-      // Mimic npm: write to stderr repeatedly across a window long enough
-      // that the parent is guaranteed to have exited mid-run.
+      // 模拟 npm：在足够长的时间窗口内反复写入 stderr，
+      // 确保父进程在运行中途已经退出。
       writeFileSync(
         installScript,
         `#!/bin/sh
@@ -448,7 +448,7 @@ setTimeout(() => process.exit(130), 200);
         child.once("error", reject);
       });
 
-      // Parent has exited; give the detached "install" room to finish.
+      // 父进程已退出；给分离出来的“安装”留出完成时间。
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
         if (existsSync(markerPath)) break;

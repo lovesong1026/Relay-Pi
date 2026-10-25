@@ -1,18 +1,18 @@
 export type CancelScheduled = () => void;
 
-/** Wall-time operations used by task and scheduled-state lifecycles. */
+/** 任务和已调度 state 生命周期使用的墙上时间操作。 */
 export interface RuntimeClock {
-  /** Return the current Unix-epoch timestamp in milliseconds. */
+  /** 返回当前 Unix 纪元时间戳（毫秒）。 */
   now(): number;
-  /** Resolve after `ms`, or reject with the abort reason when `signal` aborts first. */
+  /** 在 `signal` 先中止时，于 `ms` 后解析；或使用中止原因拒绝。 */
   sleep(ms: number, signal?: AbortSignal): Promise<void>;
-  /** Run `callback` once after `delayMs`; the returned function cancels it. */
+  /** 在 `delayMs` 后运行一次 `callback`；返回的函数会取消它。 */
   schedule(callback: () => void, delayMs: number): CancelScheduled;
-  /** Run `callback` every `intervalMs`; the returned function cancels future runs. */
+  /** 每隔 `intervalMs` 运行 `callback`；返回的函数会取消后续运行。 */
   repeat(callback: () => void, intervalMs: number): CancelScheduled;
 }
 
-/** Production clock backed by the host wall clock and timer APIs. */
+/** 由宿主墙上时钟和计时器 API 支持的生产时钟。 */
 export class SystemRuntimeClock implements RuntimeClock {
   now(): number {
     return Date.now();

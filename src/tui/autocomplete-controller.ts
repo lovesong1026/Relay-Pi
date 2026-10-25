@@ -23,52 +23,43 @@ import { buildFileIndex } from "./file-index.js";
 import { COLORS } from "./theme.js";
 
 export interface AutocompleteControllerOptions {
-  /** Input textarea whose `plainText` + `cursorOffset` drive token
-   *  detection, and whose `setSelection` / `deleteSelection` / `insertText`
-   *  methods perform the completion in place so attachment placeholders and
-   *  the cursor model stay consistent. */
+  /** 输入文本区，其 `plainText` + `cursorOffset` 驱动 token 检测，
+   * 其 `setSelection` / `deleteSelection` / `insertText` 方法在原位完成补全，
+   * 使附件占位符和光标模型保持一致。
+   */
   inputField: TextareaRenderable;
-  /** Slash + skill picker panel; `visible` is flipped from render(). */
+  /** 斜杠命令与技能选择面板；由 render() 切换 `visible`。 */
   skillAutocompletePanel: BoxRenderable;
-  /** Fixed pool of selectable rows for built-in slash commands. */
+  /** 内置斜杠命令可选行的固定池。 */
   commandRows: TextRenderable[];
-  /** Header row above the commands section; hidden when no command rows
-   *  matched the query. */
+  /** 命令分区上方的标题行；没有命令行匹配查询时隐藏。 */
   commandHeader: TextRenderable;
-  /** Fixed pool of selectable rows for matched skills. */
+  /** 匹配技能可选行的固定池。 */
   skillRows: TextRenderable[];
-  /** Header row above the skills section; hidden when no skill rows
-   *  matched the query. */
+  /** 技能分区上方的标题行；没有技能行匹配查询时隐藏。 */
   skillHeader: TextRenderable;
-  /** `@`-file picker panel; mirrors the slash panel's structure. */
+  /** `@` 文件选择面板；结构与斜杠面板相同。 */
   fileAutocompletePanel: BoxRenderable;
-  /** Fixed pool of selectable rows for matched files. */
+  /** 匹配文件可选行的固定池。 */
   fileAutocompleteRows: TextRenderable[];
-  /** Working directory used to build the file index on first `@` trigger. */
+  /** 首次触发 `@` 时用于构建文件索引的工作目录。 */
   workDir: string;
-  /**
-   * Called when the user presses Escape inside an open picker. The global
-   * escape handler runs *after* this one and would otherwise exit the TUI;
-   * the caller uses this hook to flip a one-shot suppression flag so the
-   * escape that closed the picker stops there.
+  /** 用户在已打开的选择器中按 Escape 时调用。全局 escape 处理器在此处理器
+   * 之后运行，否则会退出 TUI；调用方使用此钩子设置一次性抑制标记，
+   * 让关闭选择器的 escape 到此为止。
    */
   onEscapeClose: () => void;
-  /**
-   * Fires the moment the slash picker opens (token went from absent to
-   * present). Used to re-discover installed skills so additions made
-   * during the session show up; the cached catalog is shown first and
-   * the callback updates it asynchronously.
+  /** 斜杠选择器打开的瞬间触发（token 从无到有）。用于重新发现已安装技能，
+   * 让会话期间新增的技能也能显示；先显示缓存目录，回调再异步更新。
    */
   onSkillTokenOpened?: () => void;
 }
 
-/**
- * Owns both autocomplete pickers (slash/skill and `@`/file) and the keys
- * that drive them. The pickers share a refresh/render lifecycle (token
- * detection on every content + cursor change, lazy file index, fixed-pool
- * row updates) so they live behind one controller. Production wiring
- * inlines the completion path via `inputField.setSelection / deleteSelection
- * / insertText` so it composes with attachment placeholders.
+/** 负责两个自动补全选择器（斜杠/技能与 `@`/文件）及其驱动按键。
+ * 选择器共享刷新/渲染生命周期（每次内容和光标变化时检测 token、延迟加载文件索引、
+ * 更新固定池行），因此由同一个控制器管理。生产环境通过
+ * `inputField.setSelection / deleteSelection / insertText` 内联执行补全，
+ * 使其能与附件占位符配合。
  */
 export class AutocompleteController {
   private skills: readonly SkillAutocompleteItem[] = [];
@@ -76,9 +67,8 @@ export class AutocompleteController {
   private skillItems: SkillAutocompleteItem[] = [];
   private skillSelectedIndex = 0;
 
-  // File index loads lazily after the first @ trigger and never re-runs.
-  // Repos large enough to matter would block the first keystroke otherwise;
-  // a stale-by-a-few-files index is a fair trade for a snappy first paint.
+  // 文件索引在首次 @ 触发后延迟加载，之后不再重建。否则大型仓库会阻塞首次按键；
+  // 为换取快速的首次绘制，索引少更新几个文件是可以接受的。
   private fileAllFiles: readonly FileAutocompleteItem[] = [];
   private fileIndexPromise: Promise<readonly FileAutocompleteItem[]> | undefined;
   private fileToken: AutocompleteToken | undefined;
@@ -87,8 +77,9 @@ export class AutocompleteController {
 
   constructor(private readonly opts: AutocompleteControllerOptions) {}
 
-  /** Set the skill catalog (built-in slash commands + discovered skills).
-   *  Idempotent: callers typically invoke once after session setup completes. */
+  /** 设置技能目录（内置斜杠命令 + 发现的技能）。
+   * 幂等：调用方通常在会话设置完成后调用一次。
+   */
   setSkillItems(skills: readonly SkillAutocompleteItem[]): void {
     this.skills = skills;
   }
@@ -101,25 +92,21 @@ export class AutocompleteController {
     return Boolean(this.fileToken && this.fileItems.length > 0);
   }
 
-  /** Re-evaluate both pickers against the current input. Called on every
-   *  content change and cursor change in the textarea. */
+  /** 根据当前输入重新评估两个选择器。文本区每次内容变化和光标变化时调用。 */
   refresh(): void {
     this.refreshSkill();
     this.refreshFile();
   }
 
-  /** Force both pickers closed. Used by `/`-command submit paths and the
-   *  global escape handler. */
+  /** 强制关闭两个选择器。供 `/` 命令提交路径和全局 escape 处理器使用。 */
   hideAll(): void {
     this.hideSkill();
     this.hideFile();
   }
 
-  /**
-   * Handle a keystroke while a picker is open. Returns `true` if the key was
-   * claimed (and `key.preventDefault()` already called); the caller should
-   * stop further dispatch in that case. Returns `false` when neither picker
-   * is open or the key isn't one this controller handles.
+  /** 在选择器打开时处理按键。若按键已被接管（且已调用 `key.preventDefault()`），
+   * 返回 `true`，调用方应停止后续调度。两个选择器都未打开，
+   * 或按键不属于此控制器处理范围时，返回 `false`。
    */
   handleKey(key: KeyEvent): boolean {
     if (this.isSkillPickerOpen()) {
@@ -193,7 +180,7 @@ export class AutocompleteController {
     return false;
   }
 
-  // ---- internal -----------------------------------------------------------
+  // ---- 内部实现 -----------------------------------------------------------
 
   private async ensureFileIndex(): Promise<readonly FileAutocompleteItem[]> {
     if (this.fileAllFiles.length > 0) return this.fileAllFiles;
@@ -230,9 +217,8 @@ export class AutocompleteController {
       this.skillSelectedIndex = 0;
     }
     this.renderSkill();
-    // Fire after rendering the cached catalog so the picker paints
-    // immediately; the reload runs in the background and a follow-up
-    // setSkillItems()+refresh() updates the open picker in place.
+    // 在渲染缓存目录后触发，让选择器立即绘制；重新加载在后台进行，
+    // 后续 setSkillItems()+refresh() 会原位更新已打开的选择器。
     if (!previousToken) {
       this.opts.onSkillTokenOpened?.();
     }
@@ -246,8 +232,8 @@ export class AutocompleteController {
       return;
     }
 
-    // Capture the token id we're looking up so a slow index resolution can
-    // tell whether the user has typed past the original query and bail out.
+    // 捕获正在查找的 token ID，让缓慢的索引解析能够判断用户是否已输入到原始查询之外，
+    // 并及时退出。
     const targetStart = token.start;
     const targetEnd = token.end;
     const targetQuery = token.query;
@@ -285,9 +271,8 @@ export class AutocompleteController {
       this.opts;
     skillAutocompletePanel.visible = this.skillItems.length > 0;
 
-    // Distribute matched items into the two section row pools by group. The
-    // selection index navigates the flat list, so we track each item's flat
-    // position to highlight the correct row regardless of section.
+    // 按组将匹配项分配到两个分区行池。选择索引在扁平列表中导航，
+    // 因此跟踪每项的扁平位置，以便无论位于哪个分区都能高亮正确的行。
     const groups: Record<SlashAutocompleteGroup, { rows: TextRenderable[]; cursor: number }> = {
       commands: { rows: commandRows, cursor: 0 },
       skills: { rows: skillRows, cursor: 0 },
@@ -311,8 +296,7 @@ export class AutocompleteController {
       row.content = item.path
         ? t`${fg(nameColor)(`/${item.name}`)} ${fg(pathColor)(`(${item.path})`)}${tail}`
         : t`${fg(nameColor)(`/${item.name}`)}${tail}`;
-      // Height = name line + each wrapped description line. Without this the
-      // box defaults to a single line and clips multi-line descriptions.
+      // 高度 = 名称行 + 每个换行后的描述行。否则框默认只有一行，会截断多行描述。
       row.height = description ? 1 + description.split("\n").length : 1;
       row.fg = selected ? COLORS.agent : COLORS.hint;
       row.visible = true;
@@ -335,10 +319,8 @@ export class AutocompleteController {
       const selected = index === this.fileSelectedIndex;
       const nameColor = selected ? COLORS.status : COLORS.user;
       const pathColor = selected ? COLORS.agent : COLORS.hint;
-      // Show basename + relative directory side-by-side. The directory
-      // portion is the path with the trailing basename removed; for files at
-      // the repo root this collapses to "./" so each row has a consistent
-      // shape.
+      // 并排显示 basename 和相对目录。目录部分是移除末尾 basename 后的路径；
+      // 对于仓库根目录的文件，这会变成 "./"，让每一行的形态保持一致。
       const directory = item.relativePath.includes("/")
         ? item.relativePath.slice(0, item.relativePath.lastIndexOf("/") + 1)
         : "./";
@@ -397,12 +379,10 @@ export class AutocompleteController {
     const item = this.fileItems[this.fileSelectedIndex];
     if (!token || !item) return false;
 
-    // Insert a markdown link `[@<basename>](./<relative-path>)` so the
-    // visible token still reads as an `@`-mention while the link target is
-    // a path the agent can hand straight to its `read` tool. The format
-    // contract lives in `replaceFileAutocompleteToken`; this call site
-    // mutates the inputField in place via setSelection/insertText so it
-    // composes cleanly with attachment placeholders and the cursor model.
+    // 插入 markdown 链接 `[@<basename>](./<relative-path>)`，让可见 token
+    // 仍显示为 `@` 提及，而链接目标则是 Agent 可直接交给 `read` 工具的路径。
+    // 格式契约位于 `replaceFileAutocompleteToken`；此调用点通过
+    // setSelection/insertText 原位修改 inputField，以便与附件占位符及光标模型配合。
     const replacement = replaceFileAutocompleteToken(
       inputField.plainText,
       token,

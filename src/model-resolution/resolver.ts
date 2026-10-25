@@ -37,10 +37,9 @@ import { isConnectedProviderId, type ConnectedProviderId } from "../connected-pr
 export { DEFAULT_CLI_MEMORY_MODEL, DEFAULT_CLI_MODEL } from "./catalog.js";
 
 /**
- * Retains the CLI selection and its provenance (explicit flag, inferred
- * provider credentials, or routing-table default). The
- * shape lives in its own module so cli.ts stays focused on argv parsing and
- * the I/O harness — provider list changes don't touch the CLI surface.
+ * 保留 CLI selection 及其 provenance（显式 flag、推断出的 provider credential，或 routing-table
+ * 默认值）。类型放在独立模块中，使 cli.ts 专注于 argv 解析和 I/O harness；provider 列表
+ * 的变化不会触及 CLI 表面。
  */
 
 export interface ModelResolution {
@@ -64,29 +63,26 @@ export function resolveModelName(model: string): Model<any> {
   }
   const rawProvider = model.slice(0, separator);
   const rawModelId = model.slice(separator + 1);
-  // The CLI supports the OpenRouter router and connected subscriptions. Any
-  // other explicit pin — e.g. `anthropic:claude-opus-5.5` or
-  // `openai:gpt-6-sol` — is an unknown provider here: `resolveProviderShorthand`
-  // returns undefined, the raw provider passes through, and `catalogModel`
-  // below forwards it to pi-ai unchanged. That's incidental passthrough, not a
-  // supported path: pi-ai resolves it if it ships that provider/id and the
-  // caller supplies the credential, otherwise it resolves to an undefined
-  // model. No catalog canonicalization applies to unknown providers.
+  // CLI 支持 OpenRouter router 和已连接 subscription。其他显式 pin——例如
+  // `anthropic:claude-opus-5.5` 或 `openai:gpt-6-sol`——在此处是未知 provider：
+  // `resolveProviderShorthand` 返回 undefined，原始 provider 会透传，下面的
+  // `catalogModel` 也会原样交给 pi-ai。这是偶然的 passthrough，不是受支持的路径：
+  // 如果 pi-ai 提供该 provider/id 且调用方提供 credential，pi-ai 会解析它；否则会得到
+  // undefined model。未知 provider 不适用 catalog canonicalization。
   const provider = resolveProviderShorthand(rawProvider) ?? rawProvider;
   const modelId = isKnownProvider(provider)
     ? canonicalizeProviderModelId(provider, rawModelId)
     : rawModelId;
-  // The catalog answers for every provider. clampModelOutputTokens forwards a
-  // missing model untouched at runtime.
+  // catalog 为每个 provider 返回结果。clampModelOutputTokens 会在运行时原样转发缺失的 model。
   return clampModelOutputTokens(catalogModel(provider, modelId) as Model<any>);
 }
 
-/** Resolve an auxiliary actor through configured metered router order only. */
+/** 仅通过已配置的计费 router 顺序解析辅助 actor。 */
 export function resolveMeteredModelName(modelName: string): Model<any> {
   return resolveModelName(resolveRouterModelReference(modelName));
 }
 
-/** Shared concrete-catalog boundary used by every model-routing composition site. */
+/** 每个 model-routing composition site 共用的具体 catalog 边界。 */
 export const routingCatalogAdapter: RoutingCatalogAdapter = {
   isCatalogName: isKnownShorthand,
   normalizeSavedModelName: normalizeSavedModelSelection,
@@ -100,7 +96,7 @@ function isKnownProvider(provider: string): provider is RouterProviderName {
   return PROVIDER_ORDER.some((entry) => entry.provider === provider);
 }
 
-/** Router providers whose credential env var is configured in this process. */
+/** 当前进程中已配置 credential env var 的 router provider。 */
 export function configuredRouterProviders(): RouterProviderName[] {
   return PROVIDER_ORDER.filter((entry) => lookupProviderEnvVar(entry) !== undefined).map(
     (entry) => entry.provider,
@@ -119,8 +115,8 @@ function lookupProviderEnvVar(entry: {
 }
 
 /**
- * Same selection logic as resolveCliModel, but picks each provider's cheaper
- * observational-memory model.
+ * 与 resolveCliModel 相同的 selection logic，但选择每个 provider 更便宜的
+ * observational-memory model。
  */
 export function resolveCliMemoryModel(
   memoryModelName: string | undefined,
@@ -135,8 +131,8 @@ export function resolveCliMemoryModel(
 }
 
 /**
- * Resolve the user-visible model and report provenance so callers can show
- * "inferred from OPENROUTER_API_KEY in an env file" etc.
+ * 解析面向用户的 model，并报告 provenance，以便调用方显示类似
+ * “inferred from OPENROUTER_API_KEY in an env file”的信息。
  */
 export function resolveCliModel(
   modelName: string | undefined,
@@ -230,7 +226,7 @@ const connectedModelResolutionDependencies: ConnectedModelResolutionDependencies
   refresh: refreshConnectedTokenInBackground,
 };
 
-/** Resolve an unpinned catalog name through connected plans, then router order. */
+/** 通过已连接 plan 再按 router 顺序解析未固定的 catalog 名称。 */
 export function resolveModelReference(
   modelName: string,
   deps: ConnectedModelResolutionDependencies = connectedModelResolutionDependencies,
@@ -241,16 +237,15 @@ export function resolveModelReference(
   if (transport.planCovered && isConnectedProviderId(transport.transport)) {
     const provider = transport.transport;
     if (deps.apiKey(provider)) {
-      // The account hook can filter models the plan cannot serve (Copilot
-      // availableModelIds); a filtered model falls through to router order.
+      // account hook 可以过滤 plan 无法提供的 model（Copilot 的 availableModelIds）；
+      // 被过滤的 model 会回退到 router 顺序。
       const spec = catalogModel(provider, transport.modelId);
       if (!spec || deps.applyHook(provider, spec)) {
         return `${provider}:${transport.modelId}`;
       }
     } else {
-      // Resolution must remain synchronous. A cache miss cannot wait here, so
-      // this call keeps the existing router path while a later resolution can
-      // use the coalesced refresh started in the background.
+      // resolution 必须保持同步。cache miss 不能在这里等待，因此此调用保持现有 router 路径，
+      // 同时让后台启动的合并 refresh 供后续 resolution 使用。
       deps.refresh(provider);
     }
   }

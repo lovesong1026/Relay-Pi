@@ -57,20 +57,17 @@ import {
 } from "./observational-prompts.js";
 
 /**
- * Default `effectiveContext` when the runner doesn't specify one. 200k is a
- * comfortable mid-range target: well below frontier-model windows so memory
- * compaction kicks in early enough to keep latency and cost predictable,
- * but high enough that long-running sessions retain enough exact transcript
- * for active tool work between compactions.
+ * runner 未指定时的默认 `effectiveContext`。200k 是舒适的中间目标：远低于 frontier model window，
+ * 因此 memory compaction 会足够早触发，延迟和成本可预测；又足够高，使长时间 Session 在两次
+ * compaction 之间为主动 tool work 保留足够的精确 transcript。
  */
 export const DEFAULT_EFFECTIVE_CONTEXT = 200_000;
 
 /**
- * Reasoning effort for every observational-memory LLM call (observer +
- * reflectors). Memory extraction is a cheap, bounded task, so we run it at LOW
- * effort. This is honored by OpenAI-transport models (openai-responses, e.g.
- * the default gpt-6-luna, which maps it through the request's reasoning
- * effort) and silently ignored by anthropic-messages transports (e.g. haiku).
+ * 每次 observational-memory LLM call（observer + reflector）的 reasoning effort。Memory extraction
+ * 是便宜且有界的任务，因此使用 LOW。OpenAI-transport model（openai-responses，例如默认
+ * gpt-6-luna，会通过 request 的 reasoning effort 映射）会遵守；anthropic-messages transport
+ *（例如 haiku）会静默忽略。
  */
 const MEMORY_CALL_OPTIONS = { reasoningEffort: "low" } as const;
 
@@ -86,69 +83,54 @@ const MEMORY_CALL_OPTIONS = { reasoningEffort: "low" } as const;
  * making the global pack itself any more useful.
  */
 export const MEMORY_BUDGET_RATIOS = {
-  /** Raw-message compaction trigger (per turn). */
+  /** 每回合 raw-message compaction 的触发点。 */
   messageTokens: 0.6,
-  /** Local-memory pack ceiling between reflection events. */
+  /** 两次 reflection event 之间 local-memory pack 的上限。 */
   observationTokens: 0.325,
 } as const;
 
 /**
- * Fixed token cap on the cross-session global memory pack rendered above
- * the local-session compacted view. Held constant (rather than derived from
- * `effectiveContext`) because the pack's value is bounded by retrieval
- * quality, not by the actor's window: a 1M-window model does not benefit
- * from 75k of densest-recall reflections injected on every turn, it just
- * pays for them. 8k is enough headroom for the top tens of reflections
- * the ranker would actually choose, and the long tail stays reachable via
- * the `recall_memory` tool when the turn needs it.
+ * 渲染在 local-session 压缩视图之前的跨 Session global memory pack 的固定 token 上限。保持常量
+ *（而非从 `effectiveContext` 推导），因为 pack 的价值由 retrieval quality 而非 actor window 决定：
+ * 1M-window model 不会从每回合注入 75k 条最密集 recall 的 reflection 中受益，只会为它们付费。
+ * 8k 足以容纳 ranker 实际会选择的前几十条 reflection；需要时，long tail 仍可通过
+ * `recall_memory` tool 获取。
  */
 export const GLOBAL_CONTEXT_TOKEN_BUDGET = 8_000;
 
 /**
- * Post-observation wire-tail target as a fraction of the observation
- * trigger (`observation.messageTokens`). When raw wire-tail tokens cross
- * the trigger, the observer condenses the tail into observations and the
- * eviction horizon advances until the surviving tail fits this target.
- * 0.5 reclaims half the trigger each pass; the next observation fires
- * sooner, trading larger condensation steps for smaller, more frequent
- * ones. Doesn't count toward the actor budget because it's bounded above
- * by the trigger, which already does.
+ * observation trigger（`observation.messageTokens`）之后的 wire-tail 目标，占 trigger 的比例。
+ * raw wire-tail token 越过 trigger 时，observer 会将 tail 压缩为 observation，eviction horizon 会
+ * 前进，直到保留 tail 适配该目标。每次 0.5 会回收 trigger 的一半；下一次 observation 更早触发，
+ * 以较大 condensation step 换取更小、更频繁的 step。它不计入 actor budget，因为上限是 trigger，
+ * 而 trigger 已经计入。
  */
 export const OBSERVATION_BUFFER_RATIO = 0.5;
 
 /**
- * Per-reflection condensation target as a fraction of the reflection
- * trigger (`reflection.observationTokens`). Lower than
- * `OBSERVATION_BUFFER_RATIO` because the reflector folds the previous
- * reflection row back into the next pass, so a tighter per-pass target
- * keeps the rolled-up row from creeping toward the trigger over many
- * reflections. 0.4 reclaims 60% of the trigger each pass; the next
- * reflection fires sooner but each pass is cheaper and the steady-state
- * row stays denser.
+ * reflection trigger（`reflection.observationTokens`）之后的 condensation target，占 trigger 的比例。
+ * 比 `OBSERVATION_BUFFER_RATIO` 更低，因为 reflector 会把上一条 reflection row 折叠进下一次
+ * pass；较紧的 per-pass target 能防止 rolled-up row 在多次 reflection 中逐渐逼近 trigger。
+ * 每次 0.4 会回收 trigger 的 60%；下一次 reflection 更早触发，但每个 pass 更便宜，steady-state
+ * row 也更密集。
  */
 export const REFLECTION_BUFFER_RATIO = 0.4;
 
 /**
- * Token budgets that govern observer-call quality rather than actor-context
- * fit. These never appear in the actor model's request, so they're decoupled
- * from `effectiveContext` and held at fixed values that the observer model
- * handles reliably across providers.
+ * 控制 observer-call quality，而不是 actor-context fit 的 token budget。这些值不会出现在 actor
+ * model request 中，因此与 `effectiveContext` 解耦，并固定为 observer model 在各 provider 上
+ * 都能可靠处理的大小。
  */
 export const FIXED_OBSERVER_BUDGETS = {
   /**
-   * Cap on transcript tokens sent to one observer call. The runner
-   * trims the unobserved tail to this size from the newest end before
-   * calling the observer, so a long run of `hasMemory=false` turns
-   * can't grow the prompt past the memory model's hard window. The
-   * dropped prefix was already shown to the observer on previous turns
-   * — it was the same `hasMemory=false` content that kept the tail
-   * growing — so trimming it is information-preserving in practice.
-   * When the budget cuts through a message, that message is included
-   * partially (tail kept, head sliced) rather than dropped whole.
+   * 单次 observer call 发送的 transcript token 上限。runner 会从最新端将未观察的 tail 裁剪到
+   * 此大小后再调用 observer，因此一长串 `hasMemory=false` 回合不会让 prompt 超过 memory
+   * model hard window。被丢弃的 prefix 已在之前回合展示给 observer——它就是使 tail 持续增长的
+   * 相同 `hasMemory=false` 内容——因此实际保留信息。budget 切过 message 时，只保留该 message
+   * 的一部分（保留 tail，裁剪 head），而不是丢弃整条。
    *
-   * Sized well above any plausible single-turn payload so a normal
-   * turn is never truncated. Bump this if a single turn ever needs to
-   * carry more than ~35k transcript tokens.
+   * 该值高于任何合理的单 turn payload，因此正常 turn 不会被截断。如果单个 turn 需要携带
+   * 超过约 35k transcript token，应提高此值。
    */
   maxTranscriptTokens: 35_000,
   /**

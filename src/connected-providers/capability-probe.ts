@@ -15,16 +15,16 @@ import type { ConnectedProviderId, ConnectionEligibility } from "./store.js";
 const CHATGPT_PROBE_MODEL_ID = "gpt-6-luna";
 
 export interface CapabilityProbeResult {
-  /** Whether this account can serve plan-covered model traffic. */
+  /** 此账户是否可承载订阅覆盖的模型流量。 */
   eligibility: ConnectionEligibility;
-  /** Provider model ids available to the connected account. */
+  /** 已连接账户可用的 provider 模型 id。 */
   servedModelIds: string[];
-  /** Stable redacted reason when eligibility could not be confirmed. */
+  /** 无法确认资格时给出的稳定且已脱敏的原因。 */
   detail?: string;
 }
 
 export interface CapabilityProbeDependencies {
-  /** Completion edge replaced by deterministic HTTP-status fixtures in tests. */
+  /** 在测试中由确定性 HTTP 状态 fixture 替换的补全调用边界。 */
   complete?: (
     model: Model<Api>,
     context: Context,
@@ -42,19 +42,19 @@ export async function probeConnectedProvider(
   const oauth = entry.oauth();
   const credential = { ...credentials, type: "oauth" as const };
 
-  // The provider owns its model list: a configured fake issuer stands in for
-  // the whole provider, and its models carry the fixture's baseUrl/transport.
+  // provider 负责自己的模型列表：配置的模拟签发方代替
+  // 整个 provider，其模型带有 fixture 的 baseUrl/transport。
   const provider = entry.provider();
   const shipped = provider.getModels();
   const catalog = [...shipped, ...missingCatalogModels(id, shipped)];
-  // Account-specific availability is the provider's, not the OAuth
-  // implementation's: an ineligible Copilot plan filters every model out.
+  // 账户特定的可用性由 provider 而非 OAuth
+  // 实现负责：不符合资格的 Copilot 计划会过滤掉所有模型。
   const available = provider.filterModels?.(catalog, credential) ?? catalog;
   const servedModelIds =
     id === "openai-codex" ? transportModelIds("openai-codex") : available.map((model) => model.id);
   const copilotHasNoModels = id === "github-copilot" && hasEmptyAvailableModelIds(credentials);
-  // An ineligible Copilot account filters every model out. Probe a catalog donor
-  // anyway so connect still exercises the transport and observes its stop=error.
+  // 不符合资格的 Copilot 账户会过滤掉所有模型。仍使用目录中的基础模型探测，
+  // 使 connect 依然执行传输并观察其 stop=error。
   const model = selectProbeModel(id, available.length > 0 ? available : catalog);
   if (!model) return unknown("No probe model is available.");
 
@@ -81,8 +81,8 @@ export async function probeConnectedProvider(
         detail: "No models are available for this Copilot plan.",
       };
     }
-    // pi-ai transports surface HTTP failures as stopReason "error" instead of
-    // rejecting complete(), so billing classification must run here too.
+    // pi-ai 传输以 stopReason "error" 呈现 HTTP 故障，而不是
+    // 让 complete() 拒绝，因此此处也必须执行计费分类。
     if (message.stopReason === "error") return classifyFailure(responseStatus);
     return { eligibility: "eligible", servedModelIds };
   } catch (error) {
@@ -91,9 +91,9 @@ export async function probeConnectedProvider(
 }
 
 /**
- * Only a confirmed billing refusal may mark a plan ineligible; auth failures,
- * server errors, and network outages stay "unknown" so a transient outage
- * never persists a false eligibility verdict.
+ * 只有已确认的计费拒绝才能将计划标记为不符合资格；认证失败、
+ * 服务器错误和网络中断仍为 "unknown"，使暂时性故障
+ * 绝不会持久化错误的资格判定。
  */
 function classifyFailure(responseStatus: number | undefined): CapabilityProbeResult {
   if (responseStatus === 402) {

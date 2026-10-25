@@ -23,31 +23,31 @@ import { isPostOutputConnectedFailure } from "../connected-providers/fallback.js
 import type { TurnRunnerControlResult } from "./tools.js";
 import { usageFromMessages } from "./usage-accounting.js";
 
-/** Complete internal description accepted by the shared sub-agent executor. */
+/** 共享子 Agent executor 接受的完整内部描述。 */
 export interface SubagentSpec {
-  /** User prompt that defines the child agent's complete task. */
+  /** 定义子 Agent 完整任务的用户 prompt。 */
   prompt: string;
-  /** Optional role or behavior layer applied only to this child. */
+  /** 仅应用于此子 Agent 的可选角色或行为层。 */
   systemPrompt?: string;
-  /** Skill names the child may use; omission inherits the available skill set. */
+  /** 子 Agent 可以使用的 skill 名称；省略时继承可用 skill 集合。 */
   allowedSkills?: string[];
-  /** Working directory for the child's coding tools. */
+  /** 子 Agent 编程工具使用的工作目录。 */
   cwd?: string;
-  /** Exact or virtual model setting for this child. */
+  /** 此子 Agent 使用的精确或虚拟 model 设置。 */
   model?: string;
-  /** Reasoning effort applied to the child model. */
+  /** 应用于子 Agent model 的推理强度。 */
   thinkingLevel?: ThinkingLevel;
-  /** Whether to seed the child with the parent's current transcript. */
+  /** 是否使用父 Agent 当前的 transcript 初始化子 Agent。 */
   forkContext?: boolean;
 }
 
-/** Terminal outcome consumed by the sub-agent's owner after one prompt run. */
+/** prompt 运行一次后由子 Agent 所属者消费的终态结果。 */
 export type SubagentResult =
   | { type: "complete"; result?: string }
   | { type: "failed"; error: string }
   | { type: "interrupted" };
 
-/** Captured from the actual constructed worker, after skill and context expansion. */
+/** 在 skill 和 context 展开之后，从实际构造的 worker 捕获的内容。 */
 export interface PreparedSubagentExecution {
   prompt: string;
   systemPrompt: string;
@@ -56,42 +56,42 @@ export interface PreparedSubagentExecution {
   inheritedContext?: { systemPrompt?: string; messages: AgentMessage[] };
 }
 
-/** One in-flight execution created from a {@link SubagentSpec}. */
+/** 由 {@link SubagentSpec} 创建的一次进行中的 execution。 */
 export interface SubagentRun {
-  /** Absent on test executors that do not construct an actual model worker. */
+  /** 在不构造实际 model worker 的测试 executor 中不存在。 */
   prepared?: PreparedSubagentExecution;
-  /** Starts the sub-agent using the executor-owned prompt and transcript. */
+  /** 使用 executor 所有的 prompt 和 transcript 启动子 Agent。 */
   prompt(): Promise<SubagentResult>;
-  /** Aborts the sub-agent and makes its prompt settle as interrupted. */
+  /** 中止子 Agent，并使其 prompt 以 interrupted 结束。 */
   interrupt(reason: string): void;
-  /** Text-only partial output, excluding any forked seed transcript. */
+  /** 纯文本的部分输出，不包括 fork 的 seed transcript。 */
   partialAssistantText(): string | undefined;
-  /** The reason passed to interrupt, or undefined while uninterrupted. */
+  /** 传给 interrupt 的原因；未中断时为 undefined。 */
   interruptedReason(): string | undefined;
 }
 
 export interface SubagentAgentConfigInput {
-  /** Transient child turn state containing resolved options and seed messages. */
+  /** 包含已解析选项和 seed 消息的临时子回合 state。 */
   state: TurnState;
-  /** Identity layer placed before host system instructions for a fresh child. */
+  /** 对于全新的子 Agent，置于宿主系统指令之前的身份层。 */
   prependSystemPrompt?: string;
-  /** Per-child role layer placed after host system instructions. */
+  /** 仅应用于每个子 Agent、置于宿主系统指令之后的角色层。 */
   appendSystemPrompt?: string;
-  /** Fully rendered system prompt reused verbatim by an unrestricted context fork. */
+  /** 不受限制的 context fork 逐字复用的完整渲染系统 prompt。 */
   systemPrompt?: string;
-  /** Skills rendered into the child system prompt; undefined means unrestricted. */
+  /** 渲染进子 Agent 系统 prompt 的 skill；undefined 表示不受限制。 */
   skills?: Skill[];
-  /** Runtime tools bound to this child's working directory and permissions. */
+  /** 绑定到子 Agent 工作目录和权限的运行时工具。 */
   tools: AgentTool[];
-  /** Child-only memory identity and wire horizon; omission selects the parent runtime. */
+  /** 仅限子 Agent 的 memory identity 和 wire horizon；省略时使用父 runtime。 */
   memoryContext?: SubagentMemoryContext;
 }
 
-/** Child-local memory identity and mutable wire-shaping state. */
+/** 子 Agent 本地的 memory identity 和可变 wire-shaping state。 */
 export interface SubagentMemoryContext {
-  /** Durable scratch namespace derived from the parent session and task id. */
+  /** 从父 Session 和 task ID 派生的持久 scratch 命名空间。 */
   sessionId?: string;
-  /** Horizon mutated only by this child's context transform. */
+  /** 仅由此子 Agent 的 context transform 修改的 horizon。 */
   horizon: import("../types/protocol.js").WireGuardHorizon;
 }
 
@@ -101,79 +101,77 @@ interface SubagentMachineContext {
 }
 
 export interface SubagentExecutionContext {
-  /** Origin attached to every streamed child event and usage tick. */
+  /** 附加到每个流式子 Agent 事件和用量 tick 的来源。 */
   origin: TurnEventOrigin;
-  /** Active relay definition used to keep a state worker inside its assigned state. */
+  /** 用于将 state worker 限制在分配给它的 state 内的 active relay definition。 */
   machineContext?: SubagentMachineContext;
-  /** Scope owned by a spawned child; its nested tasks are cascade-stopped on close. */
+  /** 由生成的子 Agent 所属的 scope；关闭时其嵌套 task 会级联停止。 */
   childScopeId?: `task:${TaskId}`;
-  /** Scope that owns the spawn task and is the parent of childScopeId. */
+  /** 拥有 spawn task 且是 childScopeId 父级的 scope。 */
   ownerScopeId?: ScopeId;
-  /** Isolated observational-memory identity and horizon for this child. */
+  /** 此子 Agent 隔离的 observational-memory identity 和 horizon。 */
   memoryContext?: SubagentMemoryContext;
-  /** Transcript source of the agent that called spawn_agent. */
+  /** 调用 spawn_agent 的 Agent 的 transcript 来源。 */
   forkSource?: {
     messages(): AgentMessage[];
     systemPrompt(): string | undefined;
   };
-  /** Runtime agent published after construction for recursively spawned forks. */
+  /** 构造后为递归生成的 fork 发布的运行时 Agent。 */
   agent?: Agent;
 }
 
 export interface SubagentExecutorDeps {
-  /** Builds the pi agent after the executor has resolved model, prompt, skills, and tools. */
+  /** 在 executor 解析 model、prompt、skill 和 tool 后构造 pi Agent。 */
   createAgent(
     input: SubagentAgentConfigInput,
     onControlResult: (result: TurnRunnerControlResult) => void,
   ): Agent;
-  /** Resolves a child skill allowlist and expands slash-skill prompts against it. */
+  /** 解析子 Agent 的 skill allowlist，并基于该集合展开 slash-skill prompt。 */
   skillContext: {
-    /** Resolves allowed skill names or returns undefined for an unrestricted child. */
+    /** 解析允许的 skill 名称；不受限制的子 Agent 返回 undefined。 */
     resolveSkills(spec: SubagentSpec, ctx: SubagentExecutionContext): Skill[] | undefined;
-    /** Expands slash commands using only the skills available to this child. */
+    /** 仅使用此子 Agent 可用的 skill 展开 slash 命令。 */
     resolveSlashSkillPrompt(prompt: string, skills: Skill[] | undefined): string;
-    /** Rebuilds the system prompt when a fork restricts the parent's skill catalog. */
+    /** 当 fork 限制父 Agent 的 skill catalog 时，重建系统 prompt。 */
     createSystemPromptWithAppendedLayers(input: { skills: readonly Skill[] }): string;
   };
-  /** Parent options copied into a child before per-spec model and effort overrides. */
+  /** 在应用每个 spec 的 model 和 effort 覆盖前，复制到子 Agent 的父选项。 */
   inheritedOptions(): TurnOptions;
-  /** Resolves an explicit virtual model override to its existing default route. */
+  /** 将显式 virtual model 覆盖解析为其现有默认 route。 */
   resolveModel(
     model: string | undefined,
   ): Pick<ResolvedTarget, "modelName" | "thinkingLevel"> | undefined;
-  /** Returns a snapshot of the parent transcript when forkContext is enabled. */
+  /** 启用 forkContext 时，返回父 transcript 的快照。 */
   seedMessages(spec: SubagentSpec, ctx: SubagentExecutionContext): AgentMessage[];
-  /** Returns the byte-identical parent system prompt used by unrestricted forks. */
+  /** 返回不受限制的 fork 使用的、与父 Agent 字节一致的系统 prompt。 */
   parentSystemPrompt(ctx: SubagentExecutionContext): string | undefined;
-  /** Creates coding tools using the child's resolved cwd. */
+  /** 使用子 Agent 解析后的 cwd 创建编程工具。 */
   createTools(cwd: string | undefined, ctx: SubagentExecutionContext): { tools: AgentTool[] };
-  /** Retries the existing transient provider failures without changing child semantics. */
+  /** 在不改变子 Agent 语义的前提下，重试已有的 provider 瞬态失败。 */
   retryTransientServerErrors(agent: Agent): Promise<void>;
-  /** Cross transports only when this child has not emitted visible output or invoked a tool. */
+  /** 仅当此子 Agent 尚未发出可见输出或调用工具时，才跨 transport 切换。 */
   retryConnectedTransportFallback(agent: Agent, visibleOutput: () => boolean): Promise<void>;
-  /** Streams pi events through the turn protocol with the child origin attached. */
+  /** 通过附加的 child origin 将 pi 事件流过回合协议。 */
   emitAgentEvent(event: AgentEvent, origin: TurnEventOrigin): void;
-  /** Adds one child completion's usage to the turn aggregate. */
+  /** 将一个子 Agent 完成的用量添加到回合聚合值。 */
   recordUsage(
     usage: TurnTokenUsage | Usage | undefined,
     modelId: string | undefined,
     provider: TransportName | undefined,
   ): void;
-  /** Emits the aggregate usage snapshot after a child completion. */
+  /** 子 Agent 完成后发出聚合用量快照。 */
   emitTurnUsage(origin: TurnEventOrigin): void;
 }
 
-/** Build the single executor used by every internal sub-agent spec builder. */
+/** 构建所有内部子 Agent spec builder 共用的单一 executor。 */
 export function createSubagentExecutor(deps: SubagentExecutorDeps) {
   return (spec: SubagentSpec, ctx: SubagentExecutionContext): SubagentRun => {
     const controls: TurnRunnerControlResult[] = [];
     const seedMessages = deps.seedMessages(spec, ctx);
-    // Capture the seeded prefix length up front. The sub-agent's result,
-    // partial text, and recorded usage are all computed by slicing this prefix
-    // off agent.state.messages so a forked parent transcript isn't folded into
-    // this run. Reading `seedMessages.length` lazily at each call site would be
-    // wrong if the agent ever appended into the seed array in place, so snapshot
-    // the count once.
+    // 预先记录 seed prefix 长度。子 Agent 的结果、部分文本和记录的用量都会通过从
+    // agent.state.messages 中切掉此前缀来计算，因此 fork 的父 transcript 不会被并入本次运行。
+    // 如果每个调用点都延迟读取 `seedMessages.length`，而 Agent 曾原地向 seed 数组追加内容，
+    // 结果就会错误；因此只快照一次计数。
     const seedMessageCount = seedMessages.length;
     const resolvedModel = deps.resolveModel(spec.model);
     const inheritedOptions = deps.inheritedOptions();
@@ -196,21 +194,17 @@ export function createSubagentExecutor(deps: SubagentExecutorDeps) {
       },
     };
     const childSkills = deps.skillContext.resolveSkills(spec, ctx);
-    // Expand `/skill` slash commands the same way the parent prompt path does,
-    // scoped to the skills this state is actually allowed to use. Lets state
-    // prompts say "use the /foo skill to do xyz" and have the skill body
-    // injected, instead of shipping the literal `/foo` text to the model.
+    // 像父 prompt 路径一样展开 `/skill` slash 命令，但范围限制为此 state 实际获准使用的 skill。
+    // 这样 state prompt 可以写 "use the /foo skill to do xyz"，并注入 skill 正文，而不是把字面
+    // `/foo` 文本发送给 model。
     const expandedPrompt = deps.skillContext.resolveSlashSkillPrompt(spec.prompt, childSkills);
     const forkContext = spec.forkContext === true;
     const identityLayer = createStateAgentSystemPromptLayer(ctx.machineContext);
-    // When forking, the sub-agent's identity + per-state systemPrompt layers
-    // ride in the tail user turn so the system prompt can stay byte-identical to
-    // the parent's and preserve the provider prompt-cache prefix. There is one
-    // exception: a state that restricts skills via allowedSkills must NOT inherit
-    // the parent's full skill catalog. resolveSkills returns undefined only for
-    // an unrestricted state; when it returns a concrete allowlist we rebuild the
-    // system prompt around that allowlist instead of reusing the parent's verbatim,
-    // trading the cache prefix for the allowlist contract.
+    // 使用 fork 时，子 Agent 的 identity + 每个 state 的 systemPrompt 层会放在尾部 user 回合中，
+    // 这样系统 prompt 可以与父 Agent 保持字节一致，并保留 provider prompt-cache 前缀。唯一例外是：
+    // 通过 allowedSkills 限制 skill 的 state 不得继承父 Agent 的完整 skill catalog。
+    // resolveSkills 仅在不受限制的 state 中返回 undefined；返回具体 allowlist 时，我们会围绕该
+    // allowlist 重建系统 prompt，而不是逐字复用父 prompt，以 allowlist 契约换取缓存前缀。
     const forkSystemPrompt = forkContext
       ? childSkills === undefined
         ? deps.parentSystemPrompt(ctx)
@@ -256,10 +250,9 @@ export function createSubagentExecutor(deps: SubagentExecutorDeps) {
       };
     };
 
-    // A sub-agent runs a turn just like the parent — a loop of completion
-    // calls — so it streams a `usage` event per completion from its own
-    // `message_end` events. The finally block falls back to summing the whole
-    // message list only when no `message_end` fired (stubbed-agent test path).
+    // 子 Agent 与父 Agent 一样运行一个回合——由多次 completion 调用组成——因此会根据自身的
+    // `message_end` 事件为每次 completion 流式发送一个 `usage` 事件。只有在没有触发任何
+    // `message_end` 时（stubbed-agent 测试路径），finally 块才会回退为汇总整条消息列表。
     let recordedMessageUsage = false;
     return {
       prepared: {
@@ -338,18 +331,17 @@ export interface ClassifySpawnModelDeps {
   classify?: typeof classifyRoute;
 }
 
-/** Concrete child target selected from the parent's model setting. */
+/** 从父 Agent 的 model 设置中选择的具体子 Agent 目标。 */
 export interface SpawnModelSelection {
-  /** Concrete catalog name inherited or selected for child execution. */
+  /** 子 Agent 执行继承或选择的具体 catalog 名称。 */
   modelName: string;
-  /** Route-owned effort, present only when a virtual setting selected it. */
+  /** 仅当 virtual 设置选择该 route 时才存在、由 route 拥有的 effort。 */
   thinkingLevel?: ThinkingLevel;
 }
 
 /**
- * Resolve a child model without consulting the session's mutable ModelRouter.
- * Concrete settings inherit verbatim; virtual settings make one stateless
- * classify call on the child prompt and resolve that decision immediately.
+ * 在不查询 Session 可变的 ModelRouter 的情况下解析子 Agent model。
+ * 具体设置逐字继承；virtual 设置会基于子 Agent prompt 执行一次无状态 classify 调用，并立即解析该决定。
  */
 export async function classifySpawnModel(
   prompt: string,

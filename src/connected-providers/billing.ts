@@ -3,7 +3,7 @@ import type { TransportName } from "../model-resolution/catalog.js";
 import type { TurnTokenUsage } from "../types/protocol.js";
 import { isConnectedProviderId } from "./store.js";
 
-/** Return provider usage with subscription-covered prices forced to zero. */
+/** 返回 provider 用量，并将订阅覆盖的价格强制置零。 */
 export function usageForTransport(
   usage: TurnTokenUsage | Usage,
   provider: TransportName,

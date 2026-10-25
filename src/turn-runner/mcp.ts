@@ -9,20 +9,18 @@ import type { McpHttpServerConfig } from "../types/protocol.js";
 const MCP_TOOL_NAME_SEPARATOR = "__";
 
 /**
- * Connected MCP server runtime.
+ * 已连接的 MCP server 运行时。
  *
- * Owns one MCP client + transport per configured server, exposes the union of
- * their tools as `AgentTool[]` ready to drop into the parent or state agents,
- * and disposes connections when the turn runner shuts down.
+ * 每个已配置的 server 拥有一个 MCP client + transport；运行时将这些 server 的工具合并为
+ * `AgentTool[]`，可直接提供给父 Agent 或 state Agent，并在 TurnRunner 关闭时释放连接。
  *
- * Tool names are namespaced as `{server}__{tool}` so multiple servers with
- * overlapping tool names can coexist without collisions inside a single agent
- * turn.
+ * 工具名使用 `{server}__{tool}` 命名空间，因此单个 Agent 回合内多个名称重叠的 server
+ * 也可以共存而不会冲突。
  */
 export interface McpRuntime {
-  /** Tools backed by every connected MCP server, in deterministic order. */
+  /** 为所有已连接的 MCP server 提供的工具，顺序确定。 */
   tools: AgentTool[];
-  /** Close every transport and client. Idempotent. */
+  /** 关闭每个 transport 和 client。幂等。 */
   dispose: () => Promise<void>;
 }
 
@@ -33,9 +31,9 @@ interface McpSession {
 }
 
 /**
- * Connect to every configured HTTP MCP server and build a flat list of
- * `AgentTool`s. Servers that fail to connect are dropped with a warning so a
- * single broken server cannot block the rest of the turn runner from starting.
+ * 连接所有已配置的 HTTP MCP server，并构建扁平的 `AgentTool` 列表。
+ * 连接失败的 server 会被丢弃并发出警告，因此单个故障 server 不会阻止其余 server
+ * 以及 TurnRunner 启动。
  */
 export async function connectMcpServers(
   servers: Record<string, McpHttpServerConfig>,
@@ -94,7 +92,7 @@ export async function connectMcpServers(
     }
   }
 
-  // Sort once so the tools block is stable across turns for prompt caching.
+  // 只排序一次，使工具块在各回合间保持稳定，以便提示词缓存。
   tools.sort((a, b) => a.name.localeCompare(b.name));
 
   let disposed = false;
@@ -117,19 +115,18 @@ interface ListedMcpTool {
 
 function buildAgentTool(serverName: string, client: Client, tool: ListedMcpTool): AgentTool {
   const namespacedName = `${serverName}${MCP_TOOL_NAME_SEPARATOR}${tool.name}`;
-  // MCP tool inputSchema is JSON Schema; pi-agent's Ajv validator runs with
-  // strictSchema:false so a plain JSON Schema object is accepted in the
-  // `parameters` slot that is typed as TSchema.
+  // MCP 工具的 inputSchema 是 JSON Schema；pi-agent 的 Ajv 校验器以
+  // strictSchema:false 运行，因此可接受普通 JSON Schema 对象，放入类型标注为 TSchema 的
+  // `parameters` 槽位。
   const parameters = (tool.inputSchema ?? { type: "object" }) as TSchema;
   return {
     name: namespacedName,
     label: tool.title ?? tool.name,
     description: tool.description ?? `MCP tool "${tool.name}" provided by server "${serverName}".`,
     parameters,
-    // The abort signal is the interrupt path: user interrupts abort the agent
-    // loop's controller, and long-poll MCP tools (e.g. Composio's
-    // wait-for-connection) must die with it instead of pinning the turn until
-    // the SDK's request timeout.
+    // 中止信号是中断路径：用户中断会中止 Agent 循环的 controller，长轮询 MCP 工具
+    // （例如 Composio 的 wait-for-connection）必须随之结束，而不能将回合固定到 SDK 的
+    // 请求超时。
     execute: async (_toolCallId, params, signal) => {
       const result = (await client.callTool(
         {

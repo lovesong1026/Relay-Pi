@@ -9,54 +9,44 @@ import {
 } from "./pglite.js";
 
 /**
- * Default time the PGlite handle stays open after the last `withDb`
- * call resolves before it is closed and the cross-process lock is
- * released. Keeps short bursts of writes (observer + reflector +
- * embedding upserts in the same turn) on one open without making a
- * sitting CLI permanently hold the lock against a second CLI.
+ * 最后一次 `withDb` 调用 resolve 后，PGlite handle 继续打开的默认时间；之后关闭 handle 并
+ * 释放跨进程 lock。这样短暂的写入突发（同一回合内的 observer + reflector + embedding upsert）
+ * 可以复用一次 open，同时不会让停放的 CLI 永久占有 lock，阻塞第二个 CLI。
  */
 const DEFAULT_IDLE_CLOSE_MS = 2_000;
 
 export interface MemorySessionOptions {
-  /** Absolute path to the PGlite data directory. */
+  /** PGlite 数据目录的绝对路径。 */
   path: string;
   /**
-   * Passed through to `openPGliteHoldingLock` on each open — typically
-   * supplies `init` (migrations) and `onRecover` (quarantine surface).
+   * 每次 open 都透传给 `openPGliteHoldingLock`——通常提供 `init`（migration）和
+   * `onRecover`（quarantine surface）。
    */
   openOptions: OpenPGliteOptions;
   /**
-   * How long to keep the handle open after the last in-flight op
-   * resolves. A new `withDb` call within this window reuses the open
-   * handle and cancels the pending close. Defaults to 2s.
+   * 最后一个 in-flight op resolve 后继续保持 handle 打开的时间。在此窗口内新的 `withDb` 调用
+   * 会复用 open handle，并取消 pending close。默认为 2s。
    */
   idleCloseMs?: number;
   /**
-   * Wall-time budget for waiting on the cross-process lock before a
-   * single `withDb` call gives up. On exhaustion the call resolves to
-   * `undefined` and `onWarn` is invoked once. Defaults to 30s.
+   * 单次 `withDb` 调用放弃前等待跨进程 lock 的 wall-time budget。超时后调用 resolve 为
+   * `undefined`，并调用一次 `onWarn`。默认为 30s。
    */
   lockWaitBudgetMs?: number;
   /**
-   * Invoked once when a `withDb` call is skipped because the lock
-   * could not be acquired within `lockWaitBudgetMs`. Lets the host
-   * surface a single user-visible warning instead of repeating per
-   * skipped op.
+   * 当 `withDb` 调用因在 `lockWaitBudgetMs` 内无法获取 lock 而跳过时调用一次。
+   * 让 host 展示一条面向用户的 warning，而不是每个 skipped op 都重复。
    */
   onWarn?: (message: string) => void;
 }
 
 /**
- * Manages a single PGlite handle for one dataDir across many short
- * bursts of work. Refcounted opens keep the handle (and the
- * cross-process `.relay-pi-open.lock`) alive while any `withDb` is
- * in-flight; an idle timer releases both shortly after the last op
- * resolves so a peer process can step in.
+ * 为一个 dataDir 管理单个 PGlite handle，支持多个短暂工作 burst。Refcounted open 会在任一
+ * `withDb` in-flight 时保持 handle（及跨进程 `.relay-pi-open.lock`）存活；最后一个 op resolve
+ * 后不久由 idle timer 释放二者，让 peer 进程可以接手。
  *
- * Concurrent in-process `withDb` calls share one `PGlite.create`: the
- * first call allocates `this.opening` and every other call awaits the
- * same promise, so two opens cannot race into `init` and double-run
- * migrations against a fresh dataDir.
+ * 并发的进程内 `withDb` 调用共享一次 `PGlite.create`：第一个调用分配 `this.opening`，其余
+ * 调用等待同一 promise，因此两个 open 不会在全新的 dataDir 上竞相执行 init、重复运行 migration。
  */
 export class MemorySession {
   private readonly path: string;
@@ -83,11 +73,8 @@ export class MemorySession {
   }
 
   /**
-   * Run `fn` against the (lazily-opened) memory database. Returns
-   * `undefined` without invoking `fn` when the session is disposed or
-   * the lock could not be acquired within the budget; otherwise
-   * returns whatever `fn` returns. Errors thrown inside `fn`
-   * propagate.
+   * 针对（惰性打开的）memory database 运行 `fn`。Session 已 dispose，或在预算内无法获取 lock
+   * 时不调用 `fn`，直接返回 `undefined`；否则返回 `fn` 的结果。`fn` 抛出的错误会继续传播。
    */
   async withDb<T>(
     fn: (db: PGlite) => Promise<T>,
@@ -95,20 +82,15 @@ export class MemorySession {
   ): Promise<T | undefined> {
     if (this.disposed) return undefined;
     this.cancelIdleClose();
-    // Increment refs before awaiting the open so a concurrent
-    // `dispose()` waits for this call to finish even if the await on
-    // `ensureOpen` resolves before fn runs. Without this, dispose
-    // could see refs=0, close the handle, and leave fn to run against
-    // a closed db.
+    // 在等待 open 前增加 refs，使并发的 `dispose()` 即使在 `ensureOpen` resolve 后、fn 执行前，
+    // 也会等待此调用完成。否则 dispose 可能看到 refs=0、关闭 handle，而 fn 继续操作已关闭的 db。
     this.refs++;
     try {
       const db = await this.ensureOpen(opts?.lockWaitBudgetMs);
       if (!db) return undefined;
-      // Once the handle is open, run fn even if dispose was called
-      // while we were waiting on `ensureOpen`. dispose's drain loop
-      // waits for refs to reach zero, so the call completes against
-      // a still-open db; without this we would silently skip fn even
-      // though the caller had already committed to running it.
+      // 即使 dispose 在等待 `ensureOpen` 时被调用，handle 已打开后仍运行 fn。dispose 的 drain
+      // loop 会等待 refs 归零，因此调用会在仍打开的 db 上完成；否则会在调用方已经决定运行它时
+      // 静默跳过 fn。
       return await fn(db);
     } finally {
       this.refs--;
@@ -119,11 +101,9 @@ export class MemorySession {
   }
 
   /**
-   * Subscribe to observation-write notifications. The storage write
-   * helpers call `notifyWrite()` after landing new observation rows;
-   * `loadStoredMemory` uses this to kick the embedding backfill worker
-   * awake instead of having it poll the database on a timer. Returns an
-   * unsubscribe function.
+   * 订阅 observation-write notification。Storage write helper 在新 observation row 落库后调用
+   * `notifyWrite()`；`loadStoredMemory` 使用它唤醒 embedding backfill worker，而不是让 worker
+   * 按 timer 轮询 database。返回 unsubscribe 函数。
    */
   onWrite(listener: () => void): () => void {
     this.writeListeners.add(listener);
@@ -131,10 +111,8 @@ export class MemorySession {
   }
 
   /**
-   * Notify subscribers that observation rows were written. Called by
-   * the storage write helpers after a successful write so background
-   * consumers (the embedding backfill worker) wake event-driven rather
-   * than polling.
+   * 通知 subscriber observation row 已写入。Storage write helper 在成功写入后调用，使后台
+   * consumer（embedding backfill worker）事件驱动地唤醒，而不是轮询。
    */
   notifyWrite(): void {
     if (this.disposed) return;
@@ -142,9 +120,8 @@ export class MemorySession {
   }
 
   /**
-   * Wait for any in-flight `withDb` to drain, cancel a pending idle
-   * close, then close the handle and release the lock. Subsequent
-   * `withDb` calls resolve to `undefined`.
+   * 等待所有 in-flight `withDb` 排空，取消 pending idle close，然后关闭 handle 并释放 lock。
+   * 后续 `withDb` 调用会 resolve 为 `undefined`。
    */
   async dispose(): Promise<void> {
     if (this.disposing) return this.disposing;
@@ -155,9 +132,8 @@ export class MemorySession {
   private async runDispose(): Promise<void> {
     this.disposed = true;
     this.cancelIdleClose();
-    // Wait for in-flight withDb fns to settle. Polling is fine here:
-    // dispose is rare and refs decrements happen on microtask
-    // boundaries, so this loop spins a few times at most.
+    // 等待 in-flight withDb fn 结算。这里轮询无妨：dispose 很少发生，refs 在 microtask boundary
+    // 递减，因此最多循环几次。
     while (this.refs > 0) {
       await sleep(5);
     }
@@ -165,13 +141,10 @@ export class MemorySession {
   }
 
   /**
-   * Immediately close the handle and release the cross-process lock when
-   * no `withDb` is in flight, instead of waiting out the idle-close
-   * timer. The embedding backfill worker calls this at each batch
-   * boundary so a peer relay-pi process draining the same memory.db is not
-   * starved for the whole (multi-batch) drain. A no-op while any op is
-   * in flight (`refs > 0`) — that op still owns the open — or while the
-   * session is disposed/opening.
+   * 当没有 in-flight `withDb` 时立即关闭 handle 并释放跨进程 lock，而不是等待 idle-close timer。
+   * embedding backfill worker 在每个 batch 边界调用它，使排空同一 memory.db 的 peer relay-pi 进程
+   * 不会在整个（多批）drain 期间饿死。任何 op in-flight（`refs > 0`）时不执行——该 op 仍拥有
+   * open——Session disposed/opening 时也不执行。
    */
   async relinquish(): Promise<void> {
     if (this.disposed || this.refs > 0 || this.opening) return;
@@ -201,10 +174,9 @@ export class MemorySession {
   }
 
   private async openWithPolling(lockWaitBudgetMs?: number): Promise<PGlite> {
-    // A per-call budget (passed by `withDb`) overrides the session
-    // default for the open this call initiates. Concurrent callers that
-    // join an in-flight open (`this.opening`) inherit that open's budget;
-    // the per-call budget only applies when this call starts the open.
+    // 每次调用的 budget（由 `withDb` 传入）覆盖 Session default，并只作用于此次调用发起的 open。
+    // 加入 in-flight open（`this.opening`）的并发调用继承该 open 的 budget；per-call budget
+    // 仅在本调用启动 open 时适用。
     const budget = lockWaitBudgetMs ?? this.lockWaitBudgetMs;
     const lockPath = await pollAcquireOpenLock(this.path, budget);
     const opened = await openPGliteHoldingLock(this.path, this.openOptions, lockPath);
@@ -216,8 +188,7 @@ export class MemorySession {
     this.cancelIdleClose();
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined;
-      // Re-check refs in case a new withDb arrived between the timer
-      // firing and this callback running.
+      // 如果 timer 触发与 callback 执行之间有新的 withDb 到达，再次检查 refs。
       if (this.refs > 0 || this.disposed) return;
       void this.closeNow();
     }, this.idleCloseMs);
@@ -239,8 +210,7 @@ export class MemorySession {
       try {
         await db.close();
       } catch {
-        // PGlite occasionally throws on close after an aborted op;
-        // we still need to release the lock so a peer can open.
+        // PGlite 偶尔会在 aborted op 后 close 抛错；仍需释放 lock，以便 peer 可以打开。
       }
     }
     if (lockPath) releaseOpenLock(lockPath);

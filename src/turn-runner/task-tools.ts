@@ -33,30 +33,30 @@ export const spawnAgentSchema = Type.Object(
 export type SpawnAgentParams = Static<typeof spawnAgentSchema>;
 
 export interface SpawnAgentDependencies {
-  /** Single lifecycle owner shared with bash and the task administration tools. */
+  /** 与 bash 和 task 管理工具共享的单一生命周期所有者。 */
   taskManager: TaskManager;
-  /** Default foreground wait budget in milliseconds. */
+  /** 默认的前台等待预算（毫秒）。 */
   defaultWaitBudgetMs: number;
-  /** Runtime clock used by the shared B1 wording. */
+  /** 共享 B1 文案使用的运行时 clock。 */
   clock: RuntimeClock;
-  /** Scope of the agent that called spawn_agent. */
+  /** 调用 spawn_agent 的 Agent 所属的 scope。 */
   ownerScopeId: () => ScopeId;
-  /** Build the child only after its stable task identity and scope exist. */
+  /** 只有稳定 task identity 和 scope 都存在后才构建子 Agent。 */
   createRun(input: {
     spec: SubagentSpec;
     taskId: TaskId;
     ownerScopeId: ScopeId;
     childScopeId: `task:${TaskId}`;
   }): Promise<SubagentRun>;
-  /** Remove child-scoped scratch after all work in its scope has unwound. */
+  /** 该 scope 中的所有工作展开后，移除子 Agent scope 的 scratch。 */
   dropScratch?(taskId: TaskId): Promise<void>;
-  /** Register settlement delivery posture with the parent loop. */
+  /** 向父循环注册 settlement 的投递方式。 */
   onTaskStarted?: (id: TaskId, foregroundPending: boolean) => void;
-  /** Resolve foreground delivery bookkeeping. */
+  /** 解析前台投递 bookkeeping。 */
   onForegroundResult?: (id: TaskId, converted: boolean) => void;
 }
 
-/** Create the restricted public spawn_agent surface on the shared task rails. */
+/** 在共享 task rails 上创建受限的公共 spawn_agent surface。 */
 export function createSpawnAgentTool(
   deps: SpawnAgentDependencies,
 ): AgentTool<typeof spawnAgentSchema> {
@@ -175,13 +175,13 @@ type TaskOutputParams = Static<typeof taskOutputSchema>;
 type TaskStopParams = Static<typeof taskStopSchema>;
 
 export interface BackgroundableDependencies {
-  /** Single lifecycle owner used for starting, racing, inspecting, and stopping work. */
+  /** 用于启动、竞争前台等待、检查和停止工作的单一生命周期所有者。 */
   taskManager: TaskManager;
-  /** Default foreground wait budget; individual calls may override it in seconds. */
+  /** 默认的前台等待预算；单次调用可用秒数覆盖它。 */
   defaultWaitBudgetMs: number;
-  /** Runtime time source used for stable elapsed wording. */
+  /** 用于稳定 elapsed 文案的运行时时间源。 */
   clock: RuntimeClock;
-  /** Scope whose closure must stop the task. */
+  /** 关闭后必须停止该 task 的 scope。 */
   ownerScopeId: () => ScopeId;
   /** Convert validated tool arguments into the human-facing task label. */
   label: (params: Record<string, unknown>) => string;

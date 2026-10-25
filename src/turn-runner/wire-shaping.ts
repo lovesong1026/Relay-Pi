@@ -3,60 +3,45 @@ import { CHARS_PER_TOKEN } from "../memory/observational.js";
 import type { WireGuardHorizon } from "../types/protocol.js";
 
 /**
- * Byte-budget safety net for the dispatched message list. The token-budget
- * trigger in `createObservationalContextTransform` is the primary gate for
- * normal text-and-tool sessions, but image attachments break that gate: a
- * single inline image can carry hundreds of KB of base64 while the
- * provider's per-image token charge is bounded (and unpredictable across
- * providers and resolutions). Without a byte gate, a few large screenshots
- * could push the serialized request well past any sane limit before the
- * token estimate catches up.
+ * 已派发消息列表的字节预算安全网。`createObservationalContextTransform` 中的 token 预算触发器
+ * 是普通文本和工具 Session 的主要闸门，但图像附件会破坏这道闸门：单张内联图像可能携带数百 KB
+ * 的 base64，而 provider 按图像收取的 token 费用有上限（且在不同 provider 和分辨率之间不可预测）。
+ * 没有字节闸门时，几张大截图可能在 token 估算追上之前，就把序列化请求推过任何合理限制。
  *
- * 15 MB is well above typical text-only contexts but still bounded; it
- * caps how much image payload a single dispatched body can carry before
- * compaction kicks in, regardless of how cheap the provider claims the
- * image tokens are.
+ * 15 MB 远高于典型的纯文本上下文，但仍有明确上限；无论 provider 声称图像 token 多么便宜，
+ * 它都会限制单个派发 body 在触发压缩前可以携带的图像 payload 量。
  */
 export const WIRE_BYTE_TRIGGER = 15 * 1024 * 1024;
 
 /**
- * When eviction fires, drop oldest messages until the wire payload reaches
- * this target — well below the trigger — so the next several turns can
- * grow back up before tripping eviction again. One large block-evict per
- * crossing is far cheaper for prompt caching than incrementally trimming
- * on every turn (each advance invalidates the cached prefix once, so
- * fewer advances = fewer invalidations).
+ * 发生淘汰时，丢弃最旧消息，直到 wire payload 达到此目标——远低于触发阈值——这样接下来几回合
+ * 可以重新增长，之后才会再次触发淘汰。每次越过阈值时进行一次大的块状淘汰，比每回合渐进式裁剪
+ * 更有利于提示词缓存（每次前进只会使缓存前缀失效一次，因此前进次数越少，失效次数越少）。
  */
 export const WIRE_BYTE_TARGET = Math.floor(WIRE_BYTE_TRIGGER * 0.8);
 
 /**
- * Conservative cross-provider charge for one inline image on the wire.
- * Claude vision tops out near 1,568 tokens per image and OpenAI high-detail
- * images grow by 512px tiles, so 1,600 is a rounded estimate that creates
- * real context pressure without inflating with the base64 payload size.
+ * 单张内联图像在 wire 上的保守跨 provider 费用。
+ * Claude vision 每张图像最高约 1,568 tokens，OpenAI 的高细节图像会按 512px tile 增长，
+ * 因此 1,600 是一个四舍五入后的估计：能产生真实的上下文压力，又不会随 base64 payload 大小膨胀。
  *
- * The base64 byte length of an image is meaningless as a token signal:
- * `ceil(bytes/4)` over a 2 MB inline image scores ~500K "tokens" while the
- * provider only bills a few thousand. That mismatch tripped the
- * `messageTokens` eviction gate on image-heavy turns and evicted earlier
- * user messages from the wire (see the thread-context-loss eval). Image
- * payload size is bounded separately by {@link WIRE_BYTE_TRIGGER}.
+ * 图像的 base64 字节长度没有 token 信号意义：对 2 MB 内联图像使用 `ceil(bytes/4)` 会得到约
+ * 500K 个“tokens”，而 provider 实际只收取几千。该不匹配曾触发图像密集回合的
+ * `messageTokens` 淘汰闸门，并从 wire 中提前淘汰较早的用户消息（参见 thread-context-loss eval）。
+ * 图像 payload 大小由 {@link WIRE_BYTE_TRIGGER} 单独限制。
  */
 export const IMAGE_WIRE_TOKEN_ESTIMATE = 1_600;
 
 /**
- * Eviction will not trim below this many recent messages. The latest user
- * message is the actor's current prompt and must always survive; any
- * deeper budget shortfall is absorbed by the durable observation memory
- * that the memory transform prepends to the dispatched message list.
+ * 淘汰不会裁剪到少于此数量的最近消息。最新的 user 消息是 actor 当前的 prompt，必须始终保留；
+ * 更深层的预算缺口由 memory transform 预置到派发消息列表中的持久观察记忆吸收。
  */
 const MIN_HISTORY_TAIL = 1;
 
 /**
- * Fresh-runner default. Persistence round-trips `WireGuardHorizon` through
- * `TurnState.wireGuardHorizon`, so resumed sessions hydrate over this
- * default in place via `Object.assign` to preserve the reference identity
- * held by the observational context transform.
+ * 新 runner 的默认值。持久化会通过 `TurnState.wireGuardHorizon` 往返传递 `WireGuardHorizon`，
+ * 因此恢复的 Session 会通过 `Object.assign` 原地覆盖此默认对象，以保留 observational context
+ * transform 持有的引用身份。
  */
 export function createInitialHorizon(): WireGuardHorizon {
   return { evictionHorizon: 0 };
@@ -95,14 +80,10 @@ function messageTimestamp(msg: AgentMessage): number {
 }
 
 /**
- * Bytes contributed by one message to the serialized wire payload. Image
- * blocks count base64 length, text blocks count UTF-16 length, and every
- * other structured block (thinking with its `thinkingSignature`, toolCall,
- * toolResult details) falls back to a JSON serialization estimate. The
- * JSON path is what actually gets sent on the wire for those blocks, so
- * counting `JSON.stringify(block).length` is both the simplest and the
- * most accurate option for them. Approximate but tracks request body size
- * closely enough for budget gating and the context bar.
+ * 单条消息对序列化 wire payload 贡献的字节数。图像块按 base64 长度计数，文本块按 UTF-16 长度计数；
+ * 其他结构化块（带 `thinkingSignature` 的 thinking、toolCall、toolResult details）回退到 JSON 序列化估算。
+ * 对这些块而言，JSON 路径就是实际发送到 wire 的内容，因此计算 `JSON.stringify(block).length`
+ * 是最简单且最准确的选择。它虽是近似值，但足以紧密跟踪请求 body 大小，用于预算闸门和上下文栏。
  */
 function calculateMessageBytes(msg: AgentMessage): number {
   const content = (msg as { content?: unknown }).content;
@@ -130,14 +111,11 @@ export function calculateWireBytes(messages: AgentMessage[]): number {
 }
 
 /**
- * Token-side companion to {@link calculateWireBytes}. Text and structured
- * blocks use the same `ceil(chars / CHARS_PER_TOKEN)` heuristic the memory
- * pipeline uses elsewhere, but image blocks contribute a fixed
- * {@link IMAGE_WIRE_TOKEN_ESTIMATE} regardless of base64 size — the
- * provider's per-image charge is bounded and unrelated to payload bytes.
- * This is the value the eviction gate and the context-window usage bar
- * should compare against `messageTokens`; the byte-size safety net is
- * handled separately by {@link WIRE_BYTE_TRIGGER}.
+ * {@link calculateWireBytes} 在 token 侧的配套值。文本和结构化块使用 memory pipeline 在其他位置
+ * 采用的同一 `ceil(chars / CHARS_PER_TOKEN)` 启发式，但无论 base64 大小如何，图像块都贡献固定的
+ * {@link IMAGE_WIRE_TOKEN_ESTIMATE}；provider 的单图像费用有上限，且与 payload 字节数无关。
+ * 这是淘汰闸门和上下文窗口用量栏应与 `messageTokens` 比较的值；字节大小安全网由
+ * {@link WIRE_BYTE_TRIGGER} 单独处理。
  */
 function calculateMessageTokens(msg: AgentMessage): number {
   const content = (msg as { content?: unknown }).content;
@@ -165,22 +143,15 @@ export function calculateWireTokens(messages: AgentMessage[]): number {
 }
 
 /**
- * Drop messages whose timestamp is at or before the eviction horizon, then
- * pick a provider-valid head for the surviving tail.
+ * 丢弃时间戳早于或等于 eviction horizon 的消息，然后为保留的尾部选择一个 provider 有效的开头。
  *
- * Preferred anchor is the next real `user` turn: the cleanest head and the
- * strongest context anchor. But a long autonomous run (a tool loop with no
- * intervening user input) can leave a post-horizon tail with NO user turn
- * at all. Skipping to a user message then would walk off the end and return
- * an empty list — which starves the wire and lets the model loop forever,
- * re-planning identically from durable memory every turn because it never
- * sees its own recent work (see session_rUjMi_pUNzhB). When no user turn
- * survives, fall back to keeping the recent tail anchored on the first
- * non-orphan message: drop only leading `toolResult` messages, since a tool
- * result whose matching tool call was evicted is the one head shape the
- * provider rejects. When the tail consists only of tool results, retain
- * their calls as well: a complete interaction takes precedence over the
- * soft budget when the final result alone exceeds it.
+ * 首选锚点是下一个真正的 `user` 回合：最干净的开头，也是最强的上下文锚点。但长时间的
+ * autonomous run（没有用户输入介入的工具循环）可能会留下完全没有 user 回合的 horizon 后尾部。
+ * 此时跳到 user 消息会走到末尾并返回空列表——这会耗尽 wire，让 model 永远循环，因为每回合都从
+ * durable memory 中以相同方式重新规划，却看不到自己的近期工作（参见 session_rUjMi_pUNzhB）。
+ * 当没有 user 回合保留时，回退为将近期尾部锚定到第一条非孤儿消息：只丢弃开头的 `toolResult`，
+ * 因为匹配的 tool call 已被淘汰的 tool result 是 provider 拒绝的开头形态。当尾部只有 tool result
+ * 时，也保留它们的调用：当最终结果本身超过软预算时，完整交互优先于软预算。
  */
 export function applyEvictionHorizon(messages: AgentMessage[], horizon: number): AgentMessage[] {
   if (horizon <= 0) return messages;
@@ -200,9 +171,8 @@ export function applyEvictionHorizon(messages: AgentMessage[], horizon: number):
   while (nonOrphan < messages.length && messages[nonOrphan]!.role === "toolResult") {
     nonOrphan += 1;
   }
-  // A single large final tool result can exceed the entire budget. Keep
-  // its complete interaction even when the soft budget cannot be met:
-  // sending the result alone is rejected by providers before work can resume.
+  // 单个大型最终 tool result 可能超过整个预算。即使无法满足软预算，也要保留完整交互：
+  // 仅发送 result 会在工作恢复前被 provider 拒绝。
   if (nonOrphan >= messages.length) {
     const resultIds = new Set(
       messages
@@ -224,18 +194,14 @@ export function applyEvictionHorizon(messages: AgentMessage[], horizon: number):
 }
 
 /**
- * Walk oldest-first, advance the horizon past each message in turn, and
- * stop when the caller-supplied predicate reports both budgets satisfied.
- * `canEvict` may protect a recent semantic unit, such as the latest complete
- * tool interaction; a protected unit wins over a caller's soft budget.
- * Will not trim below {@link MIN_HISTORY_TAIL} recent messages. Returns
- * a horizon at least as advanced as `current` (advance-only).
+ * 从最旧消息开始遍历，依次将 horizon 推过每条消息；当调用方提供的谓词报告两个预算都满足时停止。
+ * `canEvict` 可以保护最近的语义单元，例如最近一次完整的工具交互；受保护单元优先于调用方的软预算。
+ * 不会裁剪到少于 {@link MIN_HISTORY_TAIL} 条最近消息。返回至少和 `current` 一样前进的 horizon
+ *（只前进）。
  *
- * Callers that need to preserve the evictable span into durable memory
- * must do so before invoking this function — advancing the horizon
- * here will drop messages whose content is only readable through the
- * memory store, so the runner's `ensureMemoryCoverageForCompaction`
- * runs first on every path that reaches this walk.
+ * 需要将可淘汰范围保留到持久 memory 的调用方，必须在调用此函数前完成保存——此处推进 horizon
+ * 会丢弃只能通过 memory store 读取内容的消息，因此 runner 会在每条到达此遍历的路径上先运行
+ * `ensureMemoryCoverageForCompaction`。
  */
 export function findEvictionHorizon(
   messages: AgentMessage[],

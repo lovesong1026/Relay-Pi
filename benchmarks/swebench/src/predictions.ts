@@ -4,15 +4,15 @@ import type { CampaignConfigName } from "./config-override.js";
 import type { RolloutAttempt } from "./artifacts.js";
 import { scoringModelName } from "./scoring-identity.js";
 
-/** Exact row accepted by the official SWE-bench predictions loader. */
+/** 官方 SWE-bench predictions loader 接受的精确记录。 */
 export interface SwebenchPrediction {
   instance_id: string;
-  /** Opaque official run identity; repeated trials must use different values. */
+  /** 不透明的官方运行身份；重复 trial 必须使用不同值。 */
   model_name_or_path: string;
   model_patch: string;
 }
 
-/** Convert completed immutable attempts into one prediction per logical rollout. */
+/** 将已完成的不可变 attempt 转换为每个逻辑 rollout 一条 prediction。 */
 export async function buildPredictions(
   attempts: readonly RolloutAttempt[],
   config: CampaignConfigName,

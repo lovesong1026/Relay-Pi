@@ -13,35 +13,17 @@ import { testIfDocker } from "../test/helpers/docker-only.js";
 
 const model = process.env.EVAL_MODEL ?? "sonnet-5";
 
-/** Requirement tokens. Random enough that a verdict naming one cannot be luck. */
+/** Requirement tokens。随机性足够强，verdict 指出其中一个不可能只是碰巧。 */
 const ALPHA = "STATUS: ALPHA-7Q2";
 const BETA = "STATUS: BETA-4X8";
 const GAMMA = "STATUS: GAMMA-9Z1";
 
 /**
- * Live end-to-end coverage for the built-in `/goal` skill. The unit test in
- * `test/built-in-skills.test.ts` proves the skill body is discovered and
- * injected; this eval proves the body actually produces the loop it
- * describes — a work state, an evaluator sub-agent that judges the goal
- * against reality, at least one incomplete round that sends the machine
- * back to work, and a terminal only after the evaluator passes.
+ * 针对内置 `/goal` skill 的 live 端到端覆盖。`test/built-in-skills.test.ts` 中的 unit test 证明 skill body 会被发现并注入；本 eval 证明该 body 确实会产生它所描述的 loop——一个 work state、一个根据现实判断 goal 的 evaluator sub-agent、至少一个把 machine 送回 work 的 incomplete round，以及只有 evaluator 通过后才出现的 terminal。
  *
- * Airtight design: the harness forces exactly one incomplete round without
- * instructing the model at all. The goal is a three-line `report.md`, and
- * the instant the first state agent starts, the harness deletes the GAMMA
- * line the parent just wrote. The parent believes the goal is met and is
- * forbidden from telling a sub-agent what it did, so a first verdict naming
- * GAMMA can ONLY come from a judge that inspected the file rather than
- * trusting the worker — no model obedience required to reproduce it. A run
- * that does the work inline (no skill body) never calls
- * `create_state_machine_definition`; a run whose "evaluator" takes the
- * parent's word never produces the incomplete→complete flip; a run whose
- * park stalls the turn never gets a second evaluation.
+ * 严密设计：harness 完全不向 model 下指令，却强制产生恰好一个 incomplete round。goal 是一个三行的 `report.md`，第一个 state agent 启动的瞬间，harness 就删除 parent 刚写入的 GAMMA 行。parent 以为 goal 已满足，且被禁止告诉 sub-agent 自己做了什么，因此第一次 verdict 指出 GAMMA 只能来自检查过文件而非相信 worker 的 judge——无需依赖 model 遵从指令即可复现。内联完成工作的 run（没有 skill body）不会调用 `create_state_machine_definition`；“evaluator”相信 parent 的 run 不会产生 incomplete→complete 翻转；park 阻塞 turn 的 run 不会得到第二次 evaluation。
  *
- * The system instructions deliberately say nothing about state machines,
- * evaluators, or rounds — every bit of that structure has to come from the
- * skill body, which is what makes the falsification (drop `goal` from
- * BUILT_IN_SKILLS) go red.
+ * system instructions 刻意不提 state machines、evaluators 或 rounds——所有这些结构都必须来自 skill body，这正是反证（从 BUILT_IN_SKILLS 中删除 `goal`）会变红的原因。
  */
 describe("/goal loop", () => {
   testIfDocker(

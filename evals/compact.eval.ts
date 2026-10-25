@@ -10,19 +10,9 @@ import { testIfDocker } from "../test/helpers/docker-only.js";
 const model = process.env.EVAL_MODEL ?? "sonnet-5";
 
 /**
- * Compact is the user-initiated wire-shaping command. The unit suite covers
- * the runner mechanics in isolation; this eval pins the end-to-end RPC
- * contract: `{type: "compact"}` lands on a live `relay-pi --rpc` process, the
- * runner advances its sticky horizon, the terminal state carries the new
- * `wireGuardHorizon` object, and a downstream process can resume from
- * that state without losing the trim.
+ * Compact 是用户发起的 wire-shaping 命令。unit suite 会隔离覆盖 runner 机制；本 eval 固定端到端 RPC contract：`{type: "compact"}` 抵达一个实时 `relay-pi --rpc` 进程，runner 推进其 sticky horizon，terminal state 携带新的 `wireGuardHorizon` 对象，下游进程可以从该 state 恢复而不丢失 trim。
  *
- * `driveRpcLoop` exits the process after its single chain's terminal, so
- * "compact between turns" is modeled as: process A runs a turn and ends,
- * process B starts with A's state, dispatches `compact` while the runner
- * is hydrated-but-idle (before any prompt arrives), then runs the next
- * turn. The runner accepts out-of-band commands at any point inside the
- * loop, including before the first turn-driving command.
+ * `driveRpcLoop` 会在其单个 chain 的 terminal 后退出进程，因此“两次 turn 之间 compact”建模为：进程 A 运行一个 turn 并结束，进程 B 以 A 的 state 启动，在 runner 已 hydrated 但 idle（尚未收到任何 prompt）时派发 `compact`，然后运行下一个 turn。runner 允许在 loop 内的任意时点接收带外命令，包括第一个驱动 turn 的命令之前。
  */
 describe("compact RPC command", () => {
   testIfDocker(
@@ -30,10 +20,7 @@ describe("compact RPC command", () => {
     async () => {
       const workDir = await mkdtemp(join(tmpdir(), "relay-pi-compact-"));
       try {
-        // Process 1: build a transcript with two turns so compact has
-        // something to evict beyond MIN_HISTORY_TAIL. Both prompts arrive
-        // before the chain's terminal so the runner queues them into the
-        // same chain and emits one terminal carrying the full history.
+        // 进程 1：构建包含两个 turn 的 transcript，使 compact 有超出 MIN_HISTORY_TAIL 的内容可以驱逐。两个 prompt 都在 chain 的 terminal 之前到达，因此 runner 会把它们排入同一个 chain，并发出携带完整 history 的一个 terminal。
         const built = await runRpcSession(
           ["--workdir", workDir, "--incognito", "--model", model],
           [
@@ -53,18 +40,10 @@ describe("compact RPC command", () => {
         expect(built.exitCode).toBe(0);
         const builtTerminal = expectTerminal(built.events);
         expect(builtTerminal.type).toBe("complete");
-        // A fresh session must not carry wireGuardHorizon: the
-        // auto-trigger does not fire on a transcript this small, so the
-        // snapshot pipeline omits the field. This pins the
-        // "fresh-runner default stays schema-clean" contract.
+        // 新 session 不得携带 wireGuardHorizon：auto-trigger 不会在这么小的 transcript 上触发，因此 snapshot pipeline 会省略该字段。这固定了“新 runner 默认保持 schema 干净”的 contract。
         expect(builtTerminal.state.wireGuardHorizon).toBeUndefined();
 
-        // Process 2: resume from process 1's state, send compact while
-        // the runner is hydrated-but-idle, then drive a turn. Compact
-        // runs before the chain starts (the loop processes out-of-band
-        // commands inline between start and the first turn command),
-        // so the next prompt's wire-tail already reflects the new
-        // horizon.
+        // 进程 2：从进程 1 的 state 恢复，在 runner 已 hydrated 但 idle 时发送 compact，然后驱动一个 turn。compact 在 chain 启动前运行（loop 会在 start 与第一个 turn 命令之间内联处理带外命令），因此下一个 prompt 的 wire-tail 已反映新的 horizon。
         const compacted = await runRpcSession(
           ["--workdir", workDir, "--incognito", "--model", model],
           [
@@ -78,12 +57,7 @@ describe("compact RPC command", () => {
           ],
         );
         expect(compacted.exitCode).toBe(0);
-        // Compact must have reported a real eviction, not a no-op. The
-        // success branch logs "compact: dropped N older wire message(s)";
-        // the no-op branch logs "compact: nothing to evict". A no-op
-        // here would mean the wire-tail couldn't shed any message
-        // without violating MIN_HISTORY_TAIL, which would break the
-        // assumption that two completed turns leave room to compact.
+        // Compact 必须报告真实的 eviction，而不是 no-op。成功分支记录 "compact: dropped N older wire message(s)"；no-op 分支记录 "compact: nothing to evict"。这里出现 no-op 就意味着 wire-tail 无法在不违反 MIN_HISTORY_TAIL 的情况下减少任何 message，这会破坏“两次已完成 turn 留有 compact 空间”的假设。
         const compactSystem = compacted.events.find(
           (event): event is Extract<TurnEvent, { type: "system" }> => isCompactSystemEvent(event),
         );
@@ -96,13 +70,7 @@ describe("compact RPC command", () => {
         expect(compactedHorizon, "post-compact terminal must carry wireGuardHorizon").toBeDefined();
         expect(compactedHorizon!.evictionHorizon).toBeGreaterThan(0);
 
-        // Compact must also republish the context-bar payload so the
-        // sidebar updates before the next prompt lands. The runner
-        // emits a `usage` event right after the horizon advance, before
-        // the M3 prompt's parent worker fires. That tick must carry a
-        // strictly smaller `messages` segment than the pre-compact
-        // parent emission from process 1; otherwise the TUI keeps
-        // showing the pre-compact slice until the next `message_end`.
+        // Compact 还必须重新发布 context-bar payload，使侧边栏在下一个 prompt 到达前更新。runner 会在 horizon 推进后立刻发出 `usage` event，早于 M3 prompt 的 parent worker 启动。该 tick 必须携带一个严格小于进程 1 的 parent emission 的 `messages` segment；否则 TUI 会一直显示 compact 前的 slice，直到下一次 `message_end`。
         const lastBuiltUsage = lastParentUsageEvent(built.events);
         expect(
           lastBuiltUsage,
@@ -122,39 +90,27 @@ describe("compact RPC command", () => {
         if (!postCompactUsage || !lastBuiltUsage) {
           throw new Error("expected usage events around compact");
         }
-        // Sanity: the breakdown is rescaled to sum to totalTokens so the
-        // bar's numerator and segment widths stay self-consistent.
+        // 健全性检查：breakdown 会重新缩放到 totalTokens 之和，因此 bar 的分子和各 segment 宽度保持自洽。
         const sum =
           postCompactUsage.contextWindowUsage.systemPrompt +
           postCompactUsage.contextWindowUsage.messages +
           postCompactUsage.contextWindowUsage.localMemory +
           postCompactUsage.contextWindowUsage.globalMemory;
         expect(sum).toBe(postCompactUsage.lastMessageUsage.totalTokens);
-        // The bar-visible behaviour: the messages segment shrinks vs the
-        // last pre-compact parent emission. This is the assertion that
-        // would have failed before `emitPostCompactUsage` was wired in.
+        // bar 可见的行为：messages segment 相对于 compact 前最后一个 parent emission 变小。这是 `emitPostCompactUsage` 接入前会失败的断言。
         expect(postCompactUsage.contextWindowUsage.messages).toBeLessThan(
           lastBuiltUsage.contextWindowUsage.messages,
         );
 
-        // The durable transcript is preserved: the M1 marker from
-        // process 1 still lives somewhere in `state.agent.messages`
-        // after the compact. Compact is wire-shaping, not
-        // transcript-mutation. JSON.stringify is the bluntest tool that
-        // survives the AgentMessage union without teaching the eval
-        // every variant shape.
+        // 持久化 transcript 会保留：进程 1 的 M1 marker 在 compact 后仍位于 `state.agent.messages` 的某处。Compact 只做 wire-shaping，不修改 transcript。JSON.stringify 是最直接、且无需让 eval 了解每种 variant shape 就能适配 AgentMessage union 的工具。
         const transcriptJson = JSON.stringify(compactedTerminal.state.agent.messages);
         expect(transcriptJson).toContain("M1_OK_INTRO_MARKER");
-        // Transcript must have grown across processes too.
+        // Transcript 也必须跨进程增长。
         expect(compactedTerminal.state.agent.messages.length).toBeGreaterThan(
           builtTerminal.state.agent.messages.length,
         );
 
-        // Process 3: resume from the post-compact state and drive
-        // another turn. The wireGuardHorizon hydrated from state.json
-        // must NOT regress to zero on this fresh runner; if it does,
-        // a session compacted before the user exits the TUI ships the
-        // full wire-tail again on next launch.
+        // 进程 3：从 compact 后的 state 恢复并驱动另一个 turn。从 state.json hydrate 的 wireGuardHorizon 绝不能在这个新 runner 上回退为零；否则用户退出 TUI 前完成 compact 的 session 会在下一次启动时再次发送完整 wire-tail。
         const resumed = await runRpcSession(
           ["--workdir", workDir, "--incognito", "--model", model],
           [
@@ -171,9 +127,7 @@ describe("compact RPC command", () => {
         expect(resumedTerminal.type).toBe("complete");
         const resumedHorizon = resumedTerminal.state.wireGuardHorizon;
         expect(resumedHorizon, "resumed terminal must carry wireGuardHorizon").toBeDefined();
-        // The auto-trigger or another compact pass could legally advance
-        // the horizon again; it must not regress below the post-compact
-        // value carried over from state.json.
+        // auto-trigger 或另一轮 compact 合法地再次推进 horizon；但它不得回退到低于从 state.json 带来的 compact 后数值。
         expect(resumedHorizon!.evictionHorizon).toBeGreaterThanOrEqual(
           compactedHorizon!.evictionHorizon,
         );
@@ -194,9 +148,7 @@ function isCompactSystemEvent(event: TurnEvent): event is Extract<TurnEvent, { t
 }
 
 /**
- * Find the most recent parent `usage` event in `events`. Parent ticks
- * have no `origin` field; state-agent ticks set `origin.agentStateName`.
- * Returns undefined when the transcript carries no parent emission yet.
+ * 在 `events` 中查找最近的 parent `usage` event。Parent tick 没有 `origin` 字段；state-agent tick 会设置 `origin.agentStateName`。当 transcript 还没有 parent emission 时返回 undefined。
  */
 function lastParentUsageEvent(
   events: TurnEvent[],
@@ -214,19 +166,13 @@ interface RpcSessionResult {
 }
 
 /**
- * Spawn `relay-pi --rpc` with `args`, feed the given commands to its stdin as
- * newline-delimited JSON, collect stdout events, and return the parsed
- * transcript. The runner queues turn-driving commands sent before the
- * first terminal into one chain, so multi-prompt setups land in a single
- * process exit.
+ * 使用 `args` 启动 `relay-pi --rpc`，将给定 commands 作为以换行分隔的 JSON 写入 stdin，收集 stdout events，并返回解析后的 transcript。runner 会把第一个 terminal 之前发送的 turn-driving commands 排入同一个 chain，因此多 prompt 设置会在一个进程退出时完成。
  */
 async function runRpcSession(
   args: string[],
   commands: TurnRunnerCommand[],
 ): Promise<RpcSessionResult> {
-  // --no-skill-sync skips the relay-pi.so default-skill fetch the CLI normally
-  // runs at startup when RELAY_PI_API_KEY is set; unrelated to what this eval
-  // asserts.
+  // --no-skill-sync 会跳过 relay-pi.so 默认 skill 的 fetch；当设置 RELAY_PI_API_KEY 时 CLI 通常会在启动时执行该 fetch；它与本 eval 的断言无关。
   const proc = Bun.spawn(["bun", "src/cli.ts", "--rpc", "--no-skill-sync", ...args], {
     cwd: process.cwd(),
     stdin: "pipe",
@@ -234,8 +180,7 @@ async function runRpcSession(
     stderr: "pipe",
   });
   await writeCommandsToStdin(proc, commands);
-  // Drain stderr so the buffer cannot stall the subprocess; the contents
-  // are not asserted on but the pipe must keep moving.
+  // 排空 stderr，避免缓冲区阻塞子进程；内容不会参与断言，但管道必须持续被读取。
   void new Response(proc.stderr).text();
   const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
   const events = stdout

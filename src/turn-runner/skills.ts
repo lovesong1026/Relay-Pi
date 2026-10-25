@@ -13,11 +13,11 @@ import {
 } from "./built-in-skills.js";
 
 export interface SkillCollision {
-  /** Skill name that collided. */
+  /** 发生冲突的 skill 名称。 */
   name: string;
-  /** Path that won (this is the skill that's actually loaded). */
+  /** 获胜的路径（即实际加载的 skill）。 */
   winnerPath: string;
-  /** Path that was skipped due to the collision. */
+  /** 因冲突而跳过的路径。 */
   loserPath: string;
 }
 
@@ -47,12 +47,10 @@ function buildSkillDiscoveryOptions(options: SkillDiscoveryOptions | undefined, 
 }
 
 function defaultSkillPaths(globalSkillRoots: string[], cwd: string): string[] {
-  // Project before global so a project-local skill can shadow a same-named
-  // global one. Within each scope, .relay-pi > .agents > .claude (first scanned
-  // wins on name collisions). Project scope walks from cwd up to the
-  // filesystem root so skills declared in any ancestor directory (e.g. a
-  // repo root or workspace root above the current package) are discovered
-  // — nearer directories win on collisions because they appear first.
+  // 项目级优先于全局级，因此项目本地 skill 可以覆盖同名全局 skill。在每个作用域内，
+  // .relay-pi > .agents > .claude（先扫描者在名称冲突中获胜）。项目作用域会从 cwd 向上遍历到
+  // 文件系统根目录，因此可以发现任意祖先目录中声明的 skill（例如仓库根目录或当前 package
+  // 之上的 workspace 根目录）；较近目录排在前面，所以在冲突中获胜。
   const ancestorPaths: string[] = [];
   for (const ancestor of walkAncestors(cwd)) {
     for (const dirName of DEFAULT_SKILL_DIR_NAMES) {
@@ -67,7 +65,7 @@ function uniquePaths(paths: string[]): string[] {
 }
 
 const SKILL_SHELL_EXPANSION_TIMEOUT_MS = 30_000;
-/** Overlap hung metadata commands without stampeding a resource-constrained runner host. */
+/** 重叠执行卡住的元数据命令，避免资源受限的 runner 宿主发生拥塞。 */
 const SKILL_METADATA_EXPANSION_CONCURRENCY = 4;
 const SKILL_SHELL_EXPANSION_OPTIONS = {
   encoding: "utf-8",
@@ -93,18 +91,15 @@ async function expandSkillShellCommands(content: string, cwd: string): Promise<s
   const matches = [...content.matchAll(SKILL_SHELL_EXPANSION_PATTERN)];
   if (matches.length === 0) return content;
 
-  // Expansions within one description retain their historical left-to-right
-  // ordering because later commands may consume side effects from earlier ones.
-  // Concurrency belongs between independent skills, not within one skill.
+  // 同一 description 内的展开保持历史上的从左到右顺序，因为后续命令可能会使用前面命令的副作用。
+  // 并发应发生在相互独立的 skill 之间，而不是同一个 skill 内。
   const expansions: string[] = [];
   for (const match of matches) {
     expansions.push(await runSkillShellCommand(match[0], match[1]!, cwd));
   }
 
-  // `replace` re-walks the same matches in the same order, so splicing the
-  // results back in stays the sync path's mechanism rather than a second
-  // hand-rolled one. A function replacement is inserted literally, so `$&`
-  // in command output cannot be reinterpreted.
+  // `replace` 会按相同顺序重新遍历这些 match，因此将结果拼回去仍沿用同步路径的机制，
+  // 而不是另写一套手工实现。函数替换会原样插入，因此命令输出中的 `$&` 不会被重新解释。
   let next = 0;
   return content.replace(SKILL_SHELL_EXPANSION_PATTERN, () => expansions[next++]!);
 }
@@ -126,8 +121,8 @@ function runSkillShellCommand(match: string, command: string, cwd: string): Prom
 }
 
 function failedSkillShellExpansion(match: string, error: unknown): string {
-  // Keep the literal token visible on failure so the model can see what was
-  // attempted. Node reports timeout termination through the child signal.
+  // 失败时保留原始 token，使模型能看到曾尝试过什么。Node 会通过子进程 signal
+  // 报告超时终止。
   const signal = (error as { signal?: string } | null)?.signal;
   const note =
     signal === "SIGTERM"
@@ -152,8 +147,7 @@ export async function loadDiscoveredSkills(
   cwd: string,
 ): Promise<DiscoveredSkillsResult> {
   const { skills, diagnostics } = loadSkills(buildSkillDiscoveryOptions(discoveryOptions, cwd));
-  // User/project skills win on name collisions, so built-ins are merged
-  // last and silently dropped when shadowed.
+  // 用户/项目 skill 在名称冲突中获胜，因此内置 skill 最后合并；被覆盖时会静默丢弃。
   return {
     skills: mergeSkillsByName(await expandSkillMetadataConcurrently(skills), listBuiltInSkills()),
     collisions: extractSkillCollisions(diagnostics),
@@ -177,9 +171,9 @@ async function expandSkillMetadataConcurrently(skills: readonly Skill[]): Promis
 }
 
 /**
- * Discover installed skills without running shell-expansion in their metadata.
- * Intended for read-only listing (e.g. `relay-pi skills`) where executing the
- * skills' shell commands would be a side effect users don't want.
+ * 发现已安装的 skill，但不执行其元数据中的 shell-expansion。
+ * 用于只读列表（例如 `relay-pi skills`），因为执行 skill 的 shell 命令会产生用户不希望
+ * 出现的副作用。
  */
 export function discoverInstalledSkills(cwd: string): DiscoveredSkillsResult {
   const { skills, diagnostics } = loadSkills(buildSkillDiscoveryOptions(undefined, cwd));
@@ -217,9 +211,8 @@ export function mergeSkillsByName(primary: readonly Skill[], secondary: readonly
 }
 
 export function readSkillInstructions(skill: Skill): string {
-  // Built-in skills ship inline with the package, so they have no on-disk
-  // SKILL.md to read. Their bodies are static and never contain shell
-  // expansions, so we return them verbatim.
+  // 内置 skill 随包内联发布，因此没有可读取的磁盘 SKILL.md。其正文是静态的，永远不包含
+  // shell expansion，所以原样返回。
   const builtIn = getBuiltInSkillInstructions(skill.filePath);
   if (builtIn !== undefined) return builtIn;
   const content = readFileSync(skill.filePath, "utf-8");
@@ -227,13 +220,12 @@ export function readSkillInstructions(skill: Skill): string {
 }
 
 /**
- * Resolve the effective scope of a skill based on which discovery root it
- * actually lives under.
+ * 根据 skill 实际所在的发现根目录，解析其有效作用域。
  *
- * pi-coding-agent only labels a single user dir + a single project dir as
- * "user"/"project" — anything else routes to "temporary". Relay Pi scans
- * three roots (.relay-pi, .agents, .claude) per scope, so we re-label here so
- * downstream consumers get the truth instead of mostly-"temporary".
+ * pi-coding-agent 只会将一个 user 目录和一个 project 目录标记为
+ * "user"/"project"——其他位置都会归为 "temporary"。Relay Pi 每个作用域会扫描三个根目录
+ *（.relay-pi、.agents、.claude），因此在此重新标记，让下游消费者获得真实结果，而不是
+ * 几乎全是 "temporary"。
  */
 export function resolveSkillScope(
   skill: Skill,

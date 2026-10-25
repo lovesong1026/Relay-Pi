@@ -1,52 +1,51 @@
 import { Buffer } from "node:buffer";
 import { basename } from "node:path";
 
-/** The established Train API ceiling, applied to UTF-8 body bytes. */
+/** 已建立的 Train API 上限，应用于 UTF-8 body 字节数。 */
 export const MAX_TRAIN_RECORD_CONTENT_BYTES = 10 * 1024 * 1024;
 
-/** A memory file's role: synthesized training or a directly curated note. */
+/** memory 文件的角色：synthesized training 或直接精选的 note。 */
 export type MemoryKind = "train" | "note";
 
-/** Scalar values retained for forward-compatible, unknown frontmatter keys. */
+/** 为向前兼容保留的未知 frontmatter key 的标量值。 */
 export type MemoryFrontmatterValue = string | number | string[];
 
-/** The typed contents of one markdown memory file, excluding its filename-owned slug. */
+/** 一个 markdown memory 文件的类型化内容，不包含由文件名负责的 slug。 */
 export interface MemoryFileRecord {
-  /** Byte-format version. Version 1 is the only format currently understood. */
+  /** 字节格式版本。目前只理解版本 1。 */
   version: 1;
-  /** Stable record identity shared with APIs and private archive metadata. */
+  /** 与 API 和私有 archive metadata 共享的稳定 record identity。 */
   id: string;
-  /** Whether the content came from training synthesis or direct note curation. */
+  /** 内容来自 training synthesis，还是直接精选的 note。 */
   kind: MemoryKind;
-  /** Unix epoch milliseconds used to derive observed dates and newest-first ordering. */
+  /** 用于推导 observed date 和从新到旧排序的 Unix epoch 毫秒数。 */
   createdAt: number;
-  /** Short display label for the curated content. */
+  /** 精选内容的简短展示标签。 */
   headline?: string;
-  /** Model identifier that produced synthesized content, when applicable. */
+  /** 生成 synthesized 内容的 model 标识（适用时存在）。 */
   model?: string;
-  /** Number of source files represented by synthesized content. */
+  /** synthesized 内容表示的 source 文件数。 */
   fileCount?: number;
-  /** Private archive manifest identifier; never an absolute archive path. */
+  /** 私有 archive manifest 标识；绝不是绝对 archive 路径。 */
   archiveId?: string;
-  /** Ranking hint consumed by memory-context selection. */
+  /** memory-context selection 使用的排序提示。 */
   priority?: string;
-  /** Origin label used when projecting a file into observational-memory shapes. */
+  /** 将文件投影为 observational-memory shape 时使用的 origin 标签。 */
   source?: string;
-  /** Search and provenance labels attached to the record. */
+  /** 附加到 record 的搜索和 provenance 标签。 */
   tags?: string[];
   /**
-   * Unknown scalar keys retained byte-stably so a newer writer can add metadata
-   * without an older reader silently deleting it on a content-only update.
+   * 按字节稳定保留未知 scalar key，使较新的 writer 可以添加 metadata，而较旧的 reader 在
+   * 只更新内容时不会静默删除它。
    */
   extra?: Record<string, MemoryFrontmatterValue>;
-  /** Exact curated markdown after the closing frontmatter delimiter. */
+  /** closing frontmatter delimiter 之后的精确精选 markdown。 */
   content: string;
 }
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// Identifiers become path segments under the private archive root, so they
-// must never be able to traverse (`..`, separators) out of it. nanoid's
-// alphabet plus the `mem_` prefix always satisfies this.
+// Identifier 会成为私有 archive 根目录下的路径片段，因此绝不能通过（`..`、分隔符）
+// traversal 离开根目录。nanoid 的 alphabet 加上 `mem_` 前缀始终满足此条件。
 const ID_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
 const NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
@@ -63,40 +62,32 @@ const KNOWN_KEYS = new Set([
   "source",
   "tags",
 ]);
-// Line endings are byte-format state, not record metadata. Keeping them on the
-// parsed object preserves CRLF without exposing a formatting field to callers.
+// Line ending 是字节格式状态，而不是 record metadata。将它保留在已解析对象上，可以在不向
+// 调用方暴露格式字段的情况下保留 CRLF。
 const parsedLineEndings = new WeakMap<MemoryFileRecord, "\n" | "\r\n">();
 
 /**
- * Identity a reader can supply for a file whose frontmatter names none — a
- * store derives it from the file itself (see `readEntry`). Each field is used
- * only when the corresponding frontmatter key is absent.
+ * reader 可为没有 frontmatter identity 的文件提供的 identity——store 从文件自身派生它
+ *（见 `readEntry`）。每个字段只会在对应 frontmatter key 缺失时使用。
  */
 export interface DerivedMemoryIdentity {
-  /**
-   * Record id to adopt when the header has no `id`. Must satisfy the safe
-   * path-segment rule (`[A-Za-z0-9_-]+`) because ids name private archive
-   * directories; the store's derivation (`mem_` + a digest) always does.
-   */
+  /** 当 header 没有 `id` 时要采用的 record id。由于 id 会命名私有 archive 目录，必须满足安全路径片段规则（`[A-Za-z0-9_-]+`）；store 的派生值（`mem_` + digest）始终满足。 */
   id: string;
   /**
-   * Unix epoch milliseconds to adopt when the header has no `createdAt`;
-   * drives newest-first ordering and the observed date, so a store passes
-   * the file's own birth time.
+   * 当 header 没有 `createdAt` 时要采用的 Unix epoch 毫秒数；它决定从新到旧排序和 observed
+   * date，因此 store 会传入文件自身的创建时间。
    */
   createdAt: number;
 }
 
 /**
- * Parse a memory file's frontmatter.
+ * 解析 memory 文件的 frontmatter。
  *
- * The grammar is deliberately loose on the way in and strict on the way out:
- * agents write these files by hand as often as through `relay-pi memory add`, so
- * plain YAML scalars (`kind: note`), single or double quotes, inline arrays of
- * plain items, blank and `#` lines, and any key order are all read. `version`
- * defaults to 1 and `kind` to `note`; `id` and `createdAt` fall back to
- * `derived` when the caller can name them from the file itself. Serializing
- * always emits the one canonical form, so a rewritten file needs no leniency.
+ * 输入时 grammar 刻意宽松，输出时严格：Agent 经常手写这些文件，也会通过
+ * `relay-pi memory add` 写入，因此可以读取普通 YAML scalar（`kind: note`）、单引号或双
+ * 引号、由普通 item 组成的 inline array、空行和 `#` 行，以及任意 key 顺序。`version` 默认
+ * 为 1，`kind` 默认是 `note`；如果调用方可以从文件自身命名它们，`id` 和 `createdAt` 会
+ * 回退到 `derived`。序列化始终输出唯一 canonical 形式，因此重写文件时无需宽松处理。
  */
 export function parseMemoryFile(
   text: string,
@@ -171,7 +162,7 @@ export function parseMemoryFile(
   return record;
 }
 
-/** Serialize a memory record into the one canonical byte representation. */
+/** 将 memory record 序列化为唯一的 canonical 字节表示。 */
 export function serializeMemoryFile(record: MemoryFileRecord): string {
   validateRecord(record);
   const lineEnding = parsedLineEndings.get(record) ?? "\n";
@@ -199,7 +190,7 @@ export function serializeMemoryFile(record: MemoryFileRecord): string {
   return `---${lineEnding}${header}${lineEnding}---${lineEnding}${record.content}`;
 }
 
-/** Return the safe slug owned by a bare `<slug>.md` filename. */
+/** 返回由裸 `<slug>.md` 文件名负责的安全 slug。 */
 export function slugFromFilename(name: string): string {
   if (basename(name) !== name || !name.endsWith(".md")) {
     throw new Error(`Memory filename must be a bare .md filename: ${name}`);
@@ -221,7 +212,7 @@ function parseScalar(rawValue: string): MemoryFrontmatterValue {
     if (inner.length === 0) return [];
     return splitInlineList(inner).map((item) => unquote(item) ?? item);
   }
-  // Anything else is a plain YAML scalar: read it as the text it is.
+  // 其他内容都是普通 YAML scalar：按其原本的文本读取。
   return rawValue;
 }
 
@@ -231,7 +222,7 @@ function unquote(value: string): string | undefined {
       const parsed: unknown = JSON.parse(value);
       if (typeof parsed === "string") return parsed;
     } catch {
-      // Not valid JSON: fall through to the literal text between the quotes.
+      // 不是有效 JSON：回退为引号之间的字面文本。
     }
     return value.slice(1, -1);
   }
@@ -241,15 +232,15 @@ function unquote(value: string): string | undefined {
   return undefined;
 }
 
-/** Split `a, "b, c", 'd'` on the commas that sit outside quotes. */
+/** 在引号外的逗号上拆分 `a, "b, c", 'd'`。 */
 function splitInlineList(inner: string): string[] {
   const items: string[] = [];
   let current = "";
   let quote: '"' | "'" | undefined;
   for (let index = 0; index < inner.length; index += 1) {
     const char = inner[index]!;
-    // A backslash inside double quotes escapes the next character (JSON
-    // rules), so an escaped quote neither closes the string nor splits it.
+    // 双引号内的反斜杠会按 JSON 规则转义下一个字符，因此转义的引号既不会关闭字符串，
+    // 也不会拆分它。
     if (quote === '"' && char === "\\") {
       current += char + (inner[index + 1] ?? "");
       index += 1;
@@ -298,7 +289,7 @@ function optionalString(
 ): string | undefined {
   const value = values.get(key);
   if (value === undefined) return undefined;
-  // A number written where text is expected reads as its text.
+  // 预期文本的位置写入 number 时，按其文本读取。
   if (typeof value === "number") return String(value);
   if (typeof value !== "string") throw new Error(`Frontmatter ${key} must be a string`);
   return value;
@@ -349,7 +340,7 @@ function optionalStringArrayProperty(
 ): Partial<Pick<MemoryFileRecord, "tags">> {
   const raw = values.get(key);
   if (raw === undefined) return {};
-  // A single plain scalar is a one-item list.
+  // 单个普通 scalar 表示只有一个 item 的 list。
   const value = typeof raw === "string" ? [raw] : raw;
   if (!Array.isArray(value) || value.some((item) => item.trim().length === 0)) {
     throw new Error(`Frontmatter ${key} must be a string array without blank items`);

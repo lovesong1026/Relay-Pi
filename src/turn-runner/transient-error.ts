@@ -1,105 +1,84 @@
 /**
- * Detect transient upstream/transport errors and apply local retry policy.
+ * 检测上游/传输层的瞬态错误，并应用本地重试策略。
  *
- * pi-agent surfaces provider failures as the last assistant message having
- * `stopReason: "error"` and an `errorMessage` string. Most failure shapes are
- * terminal (auth, bad request, model not found, refusal). A subset — gateway
- * 5xx responses, transient transport drops, websocket closes, "overloaded"
- * markers from Anthropic, retry-after exhaustion — should be retried locally:
- * they routinely succeed on a second attempt and would otherwise fail a
- * long-running state-machine state over a brief proxy hiccup.
+ * pi-agent 会将 provider 失败表现为最后一条 assistant 消息，其
+ * `stopReason: "error"` 且包含 `errorMessage` 字符串。大多数失败形态是终态
+ * （鉴权、错误请求、找不到 model、拒绝）。其中一部分——gateway 5xx 响应、瞬态传输
+ * 中断、websocket 关闭、Anthropic 的 "overloaded" 标记、重试等待耗尽——应该在本地重试：
+ * 它们通常第二次就能成功，否则一次短暂的 proxy 抖动就会使长时间运行的 state machine
+ * state 失败。
  *
- * ## Why a local helper instead of pi's built-in retry?
+ * ## 为什么使用本地 helper，而不是 pi 内置的重试？
  *
- * The pi monorepo already ships a retry loop in
- * `@earendil-works/pi-coding-agent`'s `AgentSession` (see
- * `_isRetryableError` and `_handleRetryableError` in
- * `node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js`).
- * It pops the failure assistant message, waits with exponential backoff,
- * calls `agent.continue()`, and emits `auto_retry_start`/`auto_retry_end`
- * events.
+ * pi monorepo 已经在
+ * `@earendil-works/pi-coding-agent` 的 `AgentSession` 中提供重试循环（参见
+ * `node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js` 中的
+ * `_isRetryableError` 和 `_handleRetryableError`）。它会弹出失败的 assistant 消息，使用
+ * 指数退避等待，调用 `agent.continue()`，并发出 `auto_retry_start`/`auto_retry_end` 事件。
  *
- * TurnRunner intentionally drives `Agent` directly rather than going
- * through `AgentSession` so it can own turn semantics (steer queues,
- * state-machine routing, parent vs sub-agent transcripts, memory
- * transforms, wire-shaping). That means the `AgentSession` retry path
- * does not apply to us. This module deliberately mirrors `AgentSession`'s
- * detection regex (with the same context-overflow exclusion) so transient
- * failures retry consistently whether a caller uses pi-coding-agent or
- * relay-pi. Patterns covered:
+ * TurnRunner 有意直接驱动 `Agent`，而不是经过 `AgentSession`，这样它可以拥有回合语义
+ * （steer 队列、state machine 路由、父 Agent 与子 Agent transcript、memory transform、
+ * wire-shaping）。这意味着 `AgentSession` 的重试路径不适用于我们。此模块刻意镜像
+ * `AgentSession` 的检测正则（使用相同的 context-overflow 排除规则），使调用方无论使用
+ * pi-coding-agent 还是 relay-pi，瞬态失败都能一致重试。覆盖的模式包括：
  *
- * - HTTP 429/500/502/503/504 with or without a "status code (no body)"
- *   prefix.
- * - Anthropic "overloaded" markers and generic "provider returned error"
- *   wrappers.
- * - Transport/socket failures: `fetch failed`, `socket hang up`, `ECONN*`,
- *   `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE`, "connection lost".
- * - HTTP/2 and websocket churn: "websocket closed", "other side closed",
- *   "reset before headers", "http2 request did not get a response",
- *   "ended without sending chunks", "terminated".
- * - Streaming truncation: "stream ended" (covers Anthropic's
- *   `Anthropic stream ended before message_stop`, which pi-ai throws
- *   when the SSE stream closes without a terminal `message_stop`
- *   event — a transient transport failure that retries cleanly).
- * - Timeouts: "request timed out", generic "timeout", "retry delay" (the
- *   marker pi-ai emits when `maxRetryDelayMs` is exceeded so higher-level
- *   logic can take over).
+ * - HTTP 429/500/502/503/504，可带或不带 "status code (no body)" 前缀。
+ * - Anthropic 的 "overloaded" 标记和通用的 "provider returned error" 包装。
+ * - 传输/socket 失败：`fetch failed`、`socket hang up`、`ECONN*`、`ETIMEDOUT`、
+ *   `EAI_AGAIN`、`EPIPE`、"connection lost"。
+ * - HTTP/2 和 websocket 抖动："websocket closed"、"other side closed"、
+ *   "reset before headers"、"http2 request did not get a response"、
+ *   "ended without sending chunks"、"terminated"。
+ * - 流式传输截断："stream ended"（涵盖 Anthropic 的
+ *   `Anthropic stream ended before message_stop`；当 SSE 流在没有终止的 `message_stop`
+ *   事件时关闭，pi-ai 会抛出该错误——这是可以干净重试的瞬态传输失败）。
+ * - 超时："request timed out"、通用的 "timeout"、"retry delay"（pi-ai 在超过
+ *   `maxRetryDelayMs` 时发出的标记，以便更高层逻辑接管）。
  *
- * Beyond that mirror, this module also retries a provider failure that
- * arrives with no cause attributed to it — see
- * `UNATTRIBUTED_PROVIDER_FAILURE_PATTERN`.
+ * 除了镜像上述规则外，此模块还会重试没有归因原因的 provider 失败——参见
+ * `UNATTRIBUTED_PROVIDER_FAILURE_PATTERN`。
  *
- * Context-overflow errors are handled by `tryRecoverFromContextOverflow`
- * and intentionally skipped here. Client errors (4xx other than 429) are
- * not retried because retrying with the same payload will not change the
- * outcome.
+ * context-overflow 错误由 `tryRecoverFromContextOverflow` 处理，因此在此有意跳过。
+ * 不重试客户端错误（除 429 外的 4xx），因为使用相同 payload 重试不会改变结果。
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 /**
- * Combined transient-error pattern. Kept in one regex to mirror
- * pi-coding-agent's `_isRetryableError` so behavior stays consistent
- * between the two retry sites in the pi ecosystem.
+ * 组合的瞬态错误模式。保持在一个正则中，以镜像 pi-coding-agent 的
+ * `_isRetryableError`，使 pi 生态中的两个重试位置保持一致。
  */
 const TRANSIENT_PATTERN =
   /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended|http2 request did not get a response|timed? out|timeout|terminated|retry delay|\bECONN(?:RESET|REFUSED|ABORTED)\b|\bETIMEDOUT\b|\bEPIPE\b|\bEAI_AGAIN\b/i;
 
 /**
- * Patterns excluded even when `TRANSIENT_PATTERN` matches. These are
- * client-side failures whose payload would fail identically on retry.
- * 4xx codes other than 429 are blocked here; 429 is intentionally retried
- * because the server is asking the caller to back off and try again.
+ * 即使 `TRANSIENT_PATTERN` 匹配，也要排除的模式。这些是客户端失败，其 payload 在重试时
+ * 会以相同方式失败。除 429 外的 4xx code 会在此阻止；429 则有意重试，因为 server 要求
+ * 调用方退避后再次尝试。
  */
 const NON_RETRYABLE_PATTERN =
   /\b(?:400|401|402|403|404|405|406|407|408|410|411|412|413|414|415|416|417|418|421|422|423|424|425|426|428|431|451)\b|\bunauthorized\b|\bforbidden\b|\bnot found\b/i;
 
 /**
- * A provider stream that failed without attributing a cause.
+ * 一个未归因原因的 provider 流失败。
  *
- * pi-ai's `response.failed` handler renders the failure as `${error.code ||
- * "unknown"}: ${error.message}` when the provider sends no code, and
- * `Unknown error (no error details in response)` when it sends no error
- * object at all — OpenRouter passthrough is the common source of both. That
- * is the shape a transient upstream blip takes when it lands mid-response,
- * and it earns another attempt: the alternative is discarding a whole turn's
- * work over a hiccup that usually clears on the next call.
+ * pi-ai 的 `response.failed` handler 在 provider 没有发送 code 时，会将失败渲染为
+ * `${error.code || "unknown"}: ${error.message}`；而完全没有 error 对象时，则渲染为
+ * `Unknown error (no error details in response)`——OpenRouter 透传是两者的常见来源。这正是
+ * 瞬态上游抖动在响应中途发生时的形态，因此应再尝试一次：否则一次通常下个调用就会消失的
+ * 抖动会丢掉整个回合的工作。
  *
- * Anchored to the head of the message deliberately. A bare `unknown`
- * anywhere would also match genuinely terminal failures like "unknown model"
- * or "unknown parameter", which fail identically however many times they
- * run. `NON_RETRYABLE_PATTERN` is still consulted first, so an unattributed
- * wrapper around a 4xx stays terminal.
+ * 有意锚定在消息开头。任意位置的裸 `unknown` 还会匹配 "unknown model" 或 "unknown parameter"
+ * 等真正的终态失败；无论运行多少次，它们都会以相同方式失败。仍会先检查
+ * `NON_RETRYABLE_PATTERN`，因此包裹 4xx 的无归因错误仍保持终态。
  *
- * Kept separate from `TRANSIENT_PATTERN` because that regex mirrors
- * pi-coding-agent's; this rule is ours.
+ * 它与 `TRANSIENT_PATTERN` 分开，因为后者镜像 pi-coding-agent；这个规则属于我们自己。
  */
 const UNATTRIBUTED_PROVIDER_FAILURE_PATTERN = /^unknown:|^unknown error \(no error details/i;
 
 /**
- * Returns true when `errorMessage` looks like a transient gateway/transport
- * failure that another attempt may resolve. Returns false for client errors
- * and any message that does not clearly indicate a server-side fault.
+ * 当 `errorMessage` 看起来像另一次尝试可能解决的瞬态 gateway/传输失败时返回 true。
+ * 客户端错误，以及任何不能明确表明 server 端故障的消息，返回 false。
  */
 export function isTransientServerError(errorMessage: string | undefined): boolean {
   if (!errorMessage) return false;
@@ -110,8 +89,8 @@ export function isTransientServerError(errorMessage: string | undefined): boolea
 }
 
 /**
- * True when the last assistant message in `messages` is a transient-error
- * failure that recovery can pop and retry via `agent.continue()`.
+ * 当 `messages` 的最后一条 assistant 消息是瞬态错误，且恢复逻辑可以弹出它并通过
+ * `agent.continue()` 重试时返回 true。
  */
 export function lastMessageIsTransientFailure(messages: AgentMessage[]): boolean {
   const last = messages[messages.length - 1];
@@ -121,15 +100,12 @@ export function lastMessageIsTransientFailure(messages: AgentMessage[]): boolean
 }
 
 /**
- * Retry policy applied to both the parent agent and state-machine sub-agents.
+ * 同时应用于父 Agent 和 state machine 子 Agent 的重试策略。
  *
- * - `maxAttempts` counts total prompt+continue attempts, so `3` means the
- *   initial prompt plus up to two retries.
- * - `baseDelayMs` is the first retry's delay; subsequent retries double it
- *   (with jitter) up to `maxDelayMs`.
+ * - `maxAttempts` 统计 prompt+continue 的总尝试次数，因此 `3` 表示初始 prompt 加最多两次重试。
+ * - `baseDelayMs` 是第一次重试的延迟；后续重试会将其加倍（带 jitter），上限为 `maxDelayMs`。
  *
- * Defaults mirror `AgentSession`'s defaults (3 retries, 2s base) so the
- * two retry sites in the pi ecosystem stay in sync.
+ * 默认值镜像 `AgentSession` 的默认值（3 次重试、2s 基础延迟），使 pi 生态中的两个重试位置保持同步。
  */
 export interface TransientRetryPolicy {
   maxAttempts: number;

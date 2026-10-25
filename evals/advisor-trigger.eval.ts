@@ -64,10 +64,7 @@ class CapturingRunner extends TurnRunner {
 }
 
 /**
- * Calls the real auxiliary models without asking an executor to choose whether
- * to consult. The synthetic parent snapshot stands in for an already-completed
- * parent call so this eval can inspect the production streaming event without
- * paying for an unrelated third model request.
+ * 调用真实的辅助模型，而不让执行 agent 选择是否咨询。合成的 parent 快照代表一个已经完成的 parent 调用，因此该 eval 可以检查生产环境的流式事件，而无需为无关的第三个模型请求付费。
  */
 class LiveAuxiliaryUsageRunner extends TurnRunner {
   constructor(cwd: string) {
@@ -218,9 +215,9 @@ describe("advisor trigger and router interlock", () => {
   testIfDocker(
     "challenging underspecified architecture work consults the advisor and reclassifies",
     async () => {
-      // Live consult rate on this fixture is noisy (~50% observed pre-layer);
-      // the restraint case below stays single-run strict — its failure mode is
-      // over-calling, and retries would mask that.
+      // 此 fixture 上的实时咨询率有噪声（预 layer 阶段观测到约 50%）；
+      // 下方的克制案例保持单次运行的严格性——它的失败模式是
+      // 过度调用，而重试会掩盖这一点。
       await bestOfAttempts(2, async () => {
         const runner = new CapturingRunner(
           "frontier",

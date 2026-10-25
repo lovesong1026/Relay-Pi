@@ -70,9 +70,7 @@ export function withoutBashKillTimeout(base: BashOperations): BashOperations {
 const questionOptionSchema = Type.Object(
   {
     label: Type.String({ description: "向用户展示的选项文本。" }),
-    description: Type.Optional(
-      Type.String({ description: "解释此选项的可选背景信息。" }),
-    ),
+    description: Type.Optional(Type.String({ description: "解释此选项的可选背景信息。" })),
   },
   { additionalProperties: false },
 );
@@ -80,17 +78,12 @@ const questionOptionSchema = Type.Object(
 const questionSchema = Type.Object(
   {
     question: Type.String({ description: "要向用户提出的问题。" }),
-    header: Type.Optional(
-      Type.String({ description: "此问题的可选分节标题。" }),
-    ),
+    header: Type.Optional(Type.String({ description: "此问题的可选分节标题。" })),
     options: Type.Array(questionOptionSchema, {
       minItems: 1,
-      description:
-        "用户可以选择的答案选项。每个问题至少要有一个选项，以便用户有所选择。",
+      description: "用户可以选择的答案选项。每个问题至少要有一个选项，以便用户有所选择。",
     }),
-    multiSelect: Type.Optional(
-      Type.Boolean({ description: "用户是否可以选择多个选项。" }),
-    ),
+    multiSelect: Type.Optional(Type.Boolean({ description: "用户是否可以选择多个选项。" })),
   },
   { additionalProperties: false },
 );
@@ -148,7 +141,7 @@ const todoWriteSchema = Type.Object(
   { additionalProperties: false },
 );
 
- type TodoWriteParams = Static<typeof todoWriteSchema>;
+type TodoWriteParams = Static<typeof todoWriteSchema>;
 
 export interface TodoWriteToolStorage {
   getTodos(): TurnTodo[];
@@ -163,8 +156,7 @@ const agentOverrideSchema = Type.Partial(
         description: "仅追加到此子 Agent 的系统提示词。",
       }),
       allowedSkills: Type.Array(Type.String(), {
-        description:
-          "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
+        description: "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
       }),
       cwd: Type.String({
         description:
@@ -286,9 +278,7 @@ const stateOverrideSchema = Type.Union([
 
 const baseStateSchema = {
   name: Type.String({ description: "供 select_state_machine_state 使用的状态名称。" }),
-  when: Type.Optional(
-    Type.String({ description: "指导父运行器在什么情况下应选择此状态。" }),
-  ),
+  when: Type.Optional(Type.String({ description: "指导父运行器在什么情况下应选择此状态。" })),
   inputSchema: Type.Optional(
     Type.Record(Type.String(), Type.Any(), {
       description:
@@ -309,8 +299,7 @@ const agentStateSchema = Type.Object(
     ),
     allowedSkills: Type.Optional(
       Type.Array(Type.String(), {
-        description:
-          "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
+        description: "注入此子 Agent 的技能名称。省略时注入所有可用技能。",
       }),
     ),
     cwd: Type.Optional(
@@ -359,12 +348,9 @@ const pollStateSchema = Type.Object(
       description:
         '下一次计划轮询前的重复等待时间。可使用 "3h" 或 "5d" 等时长字符串，也可使用毫秒数。',
     }),
-    timeoutMs: Type.Optional(
-      Type.Number({ description: "此状态最多可保持轮询的时间。" }),
-    ),
+    timeoutMs: Type.Optional(Type.Number({ description: "此状态最多可保持轮询的时间。" })),
     command: Type.String({
-      description:
-        "每次轮询尝试执行的 shell 命令。只有在轮询发现结果时才返回非空 JSON。",
+      description: "每次轮询尝试执行的 shell 命令。只有在轮询发现结果时才返回非空 JSON。",
     }),
     cwd: Type.Optional(
       Type.String({
@@ -407,8 +393,7 @@ const parkStateSchema = Type.Object(
   {
     ...baseStateSchema,
     kind: Type.Literal("park", {
-      description:
-        "暂停状态机，不运行任务也不安排唤醒，由父运行器决定后续操作。",
+      description: "暂停状态机，不运行任务也不安排唤醒，由父运行器决定后续操作。",
     }),
   },
   { additionalProperties: false },
@@ -487,8 +472,7 @@ const createDefinitionSchema = Type.Object(
   {
     definition: stateMachineDefinitionSchema,
     firstState: Type.String({
-      description:
-        "创建定义后首先运行的状态名称；该状态必须存在于 `definition.states` 中。",
+      description: "创建定义后首先运行的状态名称；该状态必须存在于 `definition.states` 中。",
     }),
     replaceActive: Type.Optional(
       Type.Boolean({
@@ -513,8 +497,7 @@ const selectStateSchema = Type.Object(
         }),
         reason: Type.Optional(
           Type.String({
-            description:
-              "当 `state` 指向终态时，附加到终态的自由文本说明。对非终态无效。",
+            description: "当 `state` 指向终态时，附加到终态的自由文本说明。对非终态无效。",
           }),
         ),
         override: Type.Optional(stateOverrideSchema),
@@ -853,8 +836,7 @@ function createAskUserQuestionTool(): AgentTool<typeof askUserQuestionSchema> {
     name: "ask_user_question",
     executionMode: "sequential",
     label: "Ask user question",
-    description:
-      "向用户提出一个或多个结构化选择题。继续任务需要用户输入时使用。",
+    description: "向用户提出一个或多个结构化选择题。继续任务需要用户输入时使用。",
     parameters: askUserQuestionSchema,
     async execute(_toolCallId, params) {
       // schema 在 options 上声明了 minItems: 1，但运行时仍需防御：某些 provider 仍会
@@ -893,8 +875,7 @@ const recallMemorySchema = Type.Object(
     ),
     scope: Type.Optional(
       Type.Union([Type.Literal("session"), Type.Literal("global"), Type.Literal("all")], {
-        description:
-          "'session' 仅搜索当前对话，'global' 仅搜索其他会话，'all'（默认值）搜索两者。",
+        description: "'session' 仅搜索当前对话，'global' 仅搜索其他会话，'all'（默认值）搜索两者。",
       }),
     ),
     expand: Type.Optional(

@@ -63,7 +63,7 @@ export const OBSERVATION_CONTEXT_INSTRUCTIONS = dedent`
   最新用户输入：将最新用户消息视为决定下一步行动的最高优先级信号。较早消息仍可能包含应遵守的约束、细节或上下文，但回复的首要驱动因素是最新消息。
 
   系统提醒：由 <system-reminder> 标签包裹的消息包含内部续接指导，不是用户撰写的内容。请用它保持连续性，但不要提及它，也不要将其视为用户消息的一部分。
-`;;
+`;
 
 const OBSERVER_EXTRACTION_INSTRUCTIONS = dedent`
   关键：区分用户陈述与问题

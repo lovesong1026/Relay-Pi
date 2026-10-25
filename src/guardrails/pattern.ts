@@ -6,8 +6,8 @@ import type {
 } from "../types/guardrails.js";
 
 /**
- * Pattern-based guardrail: fast, deterministic checks using regex.
- * Use for known dangerous patterns (rm -rf /, DROP TABLE, etc).
+ * 基于模式的防护：使用正则表达式进行快速、确定性检查。
+ * 用于已知危险模式（rm -rf /、DROP TABLE 等）。
  */
 export class PatternGuardrail implements Guardrail {
   name = "pattern";
@@ -21,7 +21,7 @@ export class PatternGuardrail implements Guardrail {
         if (rule.action === "block") {
           return { allowed: false, reason: rule.reason };
         }
-        // "warn" still allows but flags it
+        // "warn" 仍然允许执行，但会加以标记
         return {
           allowed: true,
           reason: `Warning: ${rule.reason}`,

@@ -14,18 +14,18 @@ export {
 } from "../memory/paths.js";
 
 export interface SessionManagerCreateInput {
-  /** Optional fixed id; the manager generates one when omitted. */
+  /** 可选的固定 id；省略时由管理器生成。 */
   sessionId?: string;
-  /** Routing mode for the new session. */
+  /** 新会话的路由模式。 */
   mode?: TurnMode;
   /**
-   * When provided, the manager dispatches this prompt as the first turn after
-   * setup completes. Omit to leave the session idle until the caller sends a
-   * prompt directly.
+   * 提供时，管理器会在初始化完成后将此提示词作为第一回合
+   * 派发。省略则让会话保持空闲，直到调用方直接发送
+   * 提示词。
    */
   prompt?: string;
   options?: TurnOptions;
-  /** Remote MCP servers to connect for the new session. */
+  /** 新会话要连接的远程 MCP 服务器。 */
   mcpServers?: Record<string, McpHttpServerConfig>;
 }
 
