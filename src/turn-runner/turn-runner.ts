@@ -213,15 +213,15 @@ import {
   wrapBackgroundable,
 } from "./task-tools.js";
 
-/** @internal Constructor-only lifecycle seams; these are deliberately absent from config. */
+/** @internal 仅供构造函数使用的生命周期接缝，不会出现在配置中。 */
 interface TurnRunnerDependencies {
-  /** Internal wall-clock seam for deterministic task and schedule lifecycle tests. */
+  /** 供内部使用的时钟接缝，用于确定性任务和调度生命周期测试。 */
   clock?: RuntimeClock;
-  /** Internal schedule-validation override; production keeps the 30-second floor. */
+  /** 供内部使用的调度校验覆盖项；生产环境仍保留 30 秒的下限。 */
   minimumScheduledDelayMs?: number;
 }
 
-/** Startup diagnostics stay silent on healthy launches and explain timeout-scale stalls. */
+/** 启动诊断在正常启动时保持静默，并说明可能导致超时的启动停滞。 */
 const SLOW_STARTUP_WARNING_MS = 2_000;
 const STARTUP_PHASES = [
   "connected_tokens",
@@ -234,13 +234,13 @@ const STARTUP_PHASES = [
 type StartupPhase = (typeof STARTUP_PHASES)[number];
 
 interface ChildToolContext {
-  /** Scope that owns tasks created by this child. */
+  /** 此子项创建的任务所属的作用域。 */
   ownerScopeId: ScopeId;
-  /** Session identity used by recall_memory. */
+  /** 供 recall_memory 使用的 Session 标识。 */
   memorySessionId?: string;
-  /** Live caller transcript used by recursive fork_context spawns. */
+  /** 递归 fork_context 启动所使用的实时调用方对话记录。 */
   forkSource: NonNullable<SubagentExecutionContext["forkSource"]>;
-  /** Concrete setting of the child that owns this recursively callable toolset. */
+  /** 拥有这组可递归调用工具的子项所使用的具体设置。 */
   modelSetting(): string;
 }
 
@@ -249,28 +249,27 @@ export type TurnEventHandler = (event: TurnEvent) => void;
 export interface AgentWorkerInput {
   state: TurnState;
   prompt: string;
-  /** Internal loop passes continue the same public turn and must retain router facts. */
+  /** 内部循环 pass 会延续同一个公开 turn，因此必须保留路由信息。 */
   continuation?: boolean;
   /**
-   * Optional image attachments forwarded to `agent.prompt(text, images)`.
-   * Only the parent prompt path carries images; state-machine sub-agents and
-   * answer commands ignore them because their prompts are runner-synthesized.
+   * 转发给 `agent.prompt(text, images)` 的可选图像附件。
+   * 仅父级 prompt 路径会携带图像；状态机子 Agent 和
+   * answer 命令会忽略图像，因为它们的 prompt 由运行器合成。
    */
   images?: ImageContent[];
 }
 
 export interface AgentConfigInput extends SubagentAgentConfigInput {
-  /** Parent boot router used to select the initial concrete model and effort. */
+  /** 父级启动路由器，用于选择初始的具体 model 和推理强度。 */
   router?: ModelRouter;
-  /** Installs the parent routing hook even when boot starts from a concrete selection. */
+  /** 即使启动时使用的是具体选择，也会安装父级路由钩子。 */
   parentModelRouting?: boolean;
 }
 
 /**
- * Internal outcome of a single `runAgentWorker` call. Narrower than the
- * public `TurnTerminalEvent`: a worker only produces `complete` or
- * `interrupted`. `ask` is synthesized later from `control`; `sleep` is
- * synthesized by the task-backed turn loop.
+ * 单次 `runAgentWorker` 调用的内部结果。范围比公开的
+ * `TurnTerminalEvent` 更窄：worker 只会产生 `complete` 或
+ * `interrupted`。`ask` 稍后由 `control` 合成；`sleep` 则由基于任务的 turn 循环合成。
  */
 export type AgentWorkerOutcome =
   | {
@@ -286,12 +285,9 @@ export interface AgentWorkerResult {
   outcome: AgentWorkerOutcome;
   control: TurnRunnerControlResult;
   /**
-   * Usage a stubbed worker fabricated for this parent call. A real parent run
-   * never sets this: it streams each completion's usage from the live `Agent`'s
-   * `message_end` events, so the aggregate is already recorded by the time the
-   * worker returns. Test harnesses that bypass the real `Agent` report usage
-   * here and record it themselves (see `TestTurnRunner.runAgentWorker`), which
-   * is why production carries no boundary-level usage accounting.
+   * 供测试替身 worker 为本次父级调用构造的用量。真实父级运行不会设置此值：它会从实时 `Agent` 的
+   * `message_end` 事件流式读取每次完成的用量，因此 worker 返回时汇总用量已经记录。绕过真实 `Agent` 的测试
+   * harness 会在此报告用量并自行记录（见 `TestTurnRunner.runAgentWorker`），因此生产代码不会在此边界核算用量。
    */
   parentUsage?: TurnTokenUsage;
 }
@@ -307,7 +303,7 @@ export type ParentLoopInput =
   | { type: "terminal_acknowledgment" }
   | { type: "wake"; queued?: boolean };
 
-/** Runner-owned continuation that never crosses the public command or event protocol. */
+/** 由运行器拥有、不会跨越公开命令或事件协议的延续输入。 */
 type PendingParentLoopInput =
   | ParentLoopInput
   | { type: "advisor_completion_review" }
@@ -325,14 +321,12 @@ type StateTaskMetadata =
     };
 
 /**
- * How many times the parent is re-prompted to emit the
- * select_state_machine_state it owes after a state completes before the runner
- * suspends the decision for explicit continuation. Missing-worker recovery without
- * a completed result still fails. Both paths bound no-progress model retries.
+ * 父级在状态完成后必须发出 `select_state_machine_state`；运行器会在暂停决策、等待明确继续之前，
+ * 重新提示父级发出该指令的次数上限。若缺少 worker 的恢复流程没有完成结果，仍会失败。两条路径都限制无进展的 model 重试次数。
  */
 const PARENT_TRANSITION_RETRY_BUDGET = 3;
 
-/** Order matches `TurnContextWindowUsage` fields; indexes map to `scaled[0..3]`. */
+/** 顺序与 `TurnContextWindowUsage` 字段一致；索引对应 `scaled[0..3]`。 */
 const CONTEXT_USAGE_KEYS = [
   "systemPrompt",
   "messages",
@@ -341,13 +335,10 @@ const CONTEXT_USAGE_KEYS = [
 ] as const satisfies readonly (keyof TurnContextWindowUsage)[];
 
 /**
- * Rescale the four segment estimates so they sum exactly to the
- * provider-reported `totalTokens` on the latest assistant message.
- * When `totalTokens` is at least the number of non-zero raw slices, each
- * such slice gets at least one token, then the rest is split by raw
- * weight with largest-remainder tie-breaks so the total is exact.
- * Otherwise proportional floors apply (some slices may be zero). When
- * every raw slice is zero, everything is attributed to `messages`.
+ * 重新缩放四个分段的估算值，使其总和恰好等于最新 assistant 消息中
+ * provider 报告的 `totalTokens`。当 `totalTokens` 不小于非零原始分段数时，每个
+ * 非零分段至少分配一个 token，再按原始权重分配剩余量，并以最大余数法打破平局，确保总数精确。
+ * 否则按比例向下取整（部分分段可能为零）。如果所有原始分段均为零，则将全部用量计入 `messages`。
  */
 export function scaleContextWindowUsageToTotalTokens(
   base: TurnContextWindowUsage,
@@ -369,8 +360,8 @@ export function scaleContextWindowUsageToTotalTokens(
 
   let scaled: number[];
   if (target >= minSum && minSum > 0) {
-    // Reserve one token per non-empty raw slice so tiny provider totals
-    // do not wipe whole segments in the UI, then split the rest by weight.
+    // 每个非空原始分段先保留一个 token，避免 provider 返回的总量很小时，
+    // UI 中的整个分段都被清零；然后按权重分配剩余量。
     scaled = [...minAlloc];
     const remainderPool = target - minSum;
     if (remainderPool > 0) {
@@ -387,8 +378,8 @@ export function scaleContextWindowUsageToTotalTokens(
       }
     }
   } else {
-    // Provider total smaller than the number of non-empty slices — fall
-    // back to pure proportional floors (some segments may be zero).
+    // provider 返回的总量小于非空分段数——改用纯比例向下取整
+    // （部分分段可能为零）。
     scaled = raw.map((v) => Math.floor((v * target) / sum));
     let remainder = target - scaled.reduce((a, b) => a + b, 0);
     const fracs = raw.map((v, i) => ({
@@ -422,140 +413,133 @@ function emptyTokenUsage(): TurnTokenUsage {
 
 export class TurnRunner {
   private readonly eventHandlers = new Set<TurnEventHandler>();
-  /** Maps pi agent events to turn steps; stateful so the canonical `tool_call` step can echo the call's input. */
+  /** 将 pi Agent 事件映射为 turn 步骤；此转换器有状态，因此规范的 `tool_call` 步骤可以回显调用输入。 */
   private readonly agentEventToTurnEvents = createAgentEventTranslator();
-  /** In-memory observation store used by context transforms during agent turns. */
+  /** 供 Agent turn 的上下文转换器使用的内存观察记录存储。 */
   protected readonly memory = new MemoryContextCache();
-  /** Hydrates, flushes, and disposes durable observation storage. */
+  /** 负责加载、刷新并释放持久化观察记录存储。 */
   private memoryPersistence?: MemoryPersistenceHandle;
   /**
-   * Session-scoped parent pi agent. It is created once during start() so model,
-   * tools, and system prompt shape stay stable for prompt caching while the
-   * transcript grows across every pi-agent turn in this relay-pi session.
+   * 按 Session 作用域管理的父级 pi Agent。它在 `start()` 时只创建一次，使 model、
+   * 工具和 system prompt 结构在本 relay-pi Session 中每个 pi-agent turn 增长时保持稳定，
+   * 从而支持 prompt 缓存。
    */
   private parentAgent?: Agent;
-  /** Virtual-model policy owner for the parent session, retained while a concrete pin suspends it. */
+  /** 父级 Session 的虚拟 model 策略所有者；具体 model 固定时会暂时挂起该策略，但仍予以保留。 */
   protected modelRouter?: ModelRouter;
-  /** Validated project routing table used by parent retargets and explicit virtual state models. */
+  /** 经过校验的项目路由表，供父级重新定向和显式虚拟状态 model 使用。 */
   private routingTable?: RoutingTable;
-  /** Model selection queued while a parent turn is running; applied at the next turn boundary. */
+  /** 父级 turn 运行期间排队的 model 选择，会在下一个 turn 边界应用。 */
   private pendingModelSelection?: string;
-  /** Advisor target and transcript budget selected with the current virtual tier. */
+  /** 随当前虚拟层级选定的顾问目标和对话记录预算。 */
   private advisorPolicy?: AdvisorPolicy;
-  /** Product-owned early/final consultation checkpoints for the active public agent-mode turn. */
+  /** 当前公开 Agent 模式 turn 的产品级前置/最终顾问检查点。 */
   private advisorTurnLifecycle?: AdvisorTurnLifecycle;
-  /** True only while the parent pi agent is actively producing the public terminal event. */
+  /** 仅当父级 pi Agent 正在生成公开终止事件时为 true。 */
   private parentAgentRunning = false;
-  /** Control results captured during the current parent pass. More than one is a protocol error. */
+  /** 当前父级 pass 捕获的控制结果。出现多个结果属于协议错误。 */
   private readonly parentControlResults: TurnRunnerControlResult[] = [];
-  /** Durable state-machine policy ledger; execution lives in TaskManager. */
+  /** 持久化的状态机策略记录；执行由 TaskManager 负责。 */
   private stateMachine?: StateMachineSession;
-  /** Runtime owner for every state execution and scheduled wake. */
-  /** Protected for test probes (task descriptors, scope injection); production owner is the loop. */
+  /** 每项状态执行和定时唤醒的运行时所有者。 */
+  /** 供测试探针使用（任务描述符、作用域注入）；生产环境中的所有者是循环。 */
   protected readonly taskManager: TaskManager;
-  /** Execution-only metadata keyed by TaskManager's stable task id. */
+  /** 以 TaskManager 的稳定任务 ID 为键的纯执行元数据。 */
   private readonly stateTasks = new Map<TaskId, StateTaskMetadata>();
-  /** One-shot context attached to the first real parent pass after lost-task recovery. */
+  /** 任务丢失后恢复时，附加到首个实际父级 pass 的一次性上下文。 */
   private recoveredTaskReminder?: string;
-  /** Only crash recovery may demand that orphaned executable state resume. */
+  /** 只有崩溃恢复流程可以要求继续执行孤立的可执行状态。 */
   private recoverExecution = false;
-  /** Ask withheld by the quiescence gate; re-surfaced on the parent's next pass. */
+  /** 被静默门控暂存的 ask；会在父级下一次 pass 中重新呈现。 */
   private withheldAskQuestions?: TurnQuestion[];
-  /** Legacy persisted user-lane projection retained until the next loop owns it. */
+  /** 保留的旧版用户通道投影，直到下一个循环接管它。 */
   private hydratedQueuedCommands?: TurnCommand[];
-  /** Inputs waiting for the single parent slot between sequential passes. */
+  /** 在连续 pass 之间等待占用唯一父级槽位的输入。 */
   private readonly parentInputs: PendingParentLoopInput[] = [];
-  // Pi's queues are transient delivery copies. The outer queue owns accepted
-  // commands until pi emits their exact message object as consumed input.
+  // Pi 的队列是临时的投递副本。外层队列负责持有已接受的
+  // 命令，直到 pi 发出对应的消息对象，表明该输入已被消费。
   private readonly piQueuedInputs = new Map<
     AgentMessage,
     Extract<ParentLoopInput, { type: "user_command" }>
   >();
-  /** Wakes the loop when a user command arrives while task work is in process. */
+  /** 用户命令在任务处理期间到达时唤醒循环。 */
   private readonly parentInputWaiters = new Set<() => void>();
-  /** Settlements already folded into the ledger during replacement/interrupt. */
+  /** 替换/中断期间已并入记录的任务结算结果。 */
   private readonly ignoredTaskSettlements = new Set<TaskId>();
-  /** Settled tasks taken off the task manager but not yet queued for the parent. */
+  /** 已从任务管理器取出、但尚未排入父级队列的已结算任务。 */
   private readonly heldSettlements: TaskSettlement[] = [];
-  /** Delivery posture for task-backed foreground bash calls. */
+  /** 由任务支持的前台 bash 调用的投递状态。 */
   private readonly taskSettlementDelivery = new Map<
     TaskId,
     "foreground_pending" | "deliver" | "suppress"
   >();
-  /** Coalesces same-tick settlements into one FIFO drain and one B3 notice. */
+  /** 将同一 tick 内的多个结算合并为一次 FIFO 排空和一条 B3 通知。 */
   private settlementDeliveryQueued = false;
-  /** End-of-turn park nudge already spent; refreshed whenever a state runs. */
+  /** 本 turn 的 park 提醒已用；每次运行状态时重置。 */
   private parkNudged = false;
-  /** Monotonic root-scope suffix; each public turn owns one root scope. */
+  /** 单调递增的根作用域后缀；每个公开 turn 拥有一个根作用域。 */
   private nextRootScope = 1;
-  /** Scope currently accepting state tasks. */
+  /** 当前接收状态任务的作用域。 */
   private activeRootScopeId?: `turn-${number}`;
-  /** Tools are built once at the public-turn boundary and reused by every parent pass. */
+  /** 工具在公开 turn 边界只构建一次，并由每个父级 pass 复用。 */
   private turnTools?: AgentTool[];
-  /** Set by interrupt so the loop's sole exit can short-circuit pending-work computation. */
+  /** 由 interrupt 设置，使循环唯一的退出路径可跳过待处理工作计算。 */
   private interruptReason?: string;
-  /** Full task/process unwind started by interrupt(), awaited before its terminal. */
+  /** 由 interrupt 启动的完整任务/进程清理流程；发出终止事件前会等待它完成。 */
   private interruptCleanup?: Promise<void>;
-  /** Guards the single public terminal emission for the active turn. */
+  /** 防止当前 turn 重复发出公开终止事件。 */
   private terminalEmitted = false;
-  /** Shared construction path for relay agent states and spawned children. */
+  /** relay 状态和已启动子项共用的构造路径。 */
   private readonly subagentExecutor: ReturnType<typeof createSubagentExecutor>;
   /**
-   * Set true by `interrupt()` while a parent-agent prompt is in flight, so
-   * `runAgentWorker` can tell our own abort apart from a real provider error
-   * after `agent.prompt()` rejects. The interrupted `TurnState` itself lives
-   * on `this.state` (written by `interrupt()` before aborting); this flag is
-   * just the discriminator. Reset at the start of each `runAgentWorker`.
+   * 当父级 Agent 的 prompt 正在处理中，`interrupt()` 会将其设为 true，
+   * 这样 `agent.prompt()` 被拒绝后，`runAgentWorker` 就能区分本地中止与真实 provider 错误。被中断的 `TurnState`
+   * 本身保存在 `this.state` 中（由 `interrupt()` 在中止前写入）；此标记仅用于区分两者。每次
+   * `runAgentWorker` 开始时重置。
    */
   private parentAgentInterrupted = false;
   /**
-   * Active work-chain promise. Callers may call turn() repeatedly while this is
-   * set; those commands are folded into the same relay-pi turn. A relay-pi
-   * turn may contain multiple parent pi-agent turns and multiple state-machine
-   * transitions, but it emits one public terminal event for the whole chain.
+   * 当前活动工作链的 promise。此值存在期间，调用方可以重复调用 `turn()`；这些
+   * 命令会并入同一个 relay-pi turn。一个 relay-pi turn 可以包含多个父级 pi-agent turn 和多个状态机
+   * 转换，但整个工作链只会发出一个公开终止事件。
    */
   private activeTurnPromise?: Promise<TurnTerminalEvent>;
   /**
-   * In-flight `compact()` promise, published while the drain + horizon
-   * advance is running so concurrent `turn()` calls can serialize behind
-   * it. Compact has no `activeTurnPromise` (it does not start a turn
-   * chain), so this is the only signal a fire-and-forget caller (e.g. the
-   * TUI `/compact` slash command followed immediately by a prompt) has
-   * that the wire-shaping horizon is mid-advance.
+   * 正在执行的 `compact()` promise。排空和推进 horizon 期间会公布此 promise，
+   * 以便并发的 `turn()` 调用排在其后。Compact 不会设置 `activeTurnPromise`（它不会启动 turn
+   * 工作链），因此对于 fire-and-forget 调用方（例如紧接 prompt 发出的 TUI `/compact` slash 命令），
+   * 这是唯一能表明 wire-shaping horizon 正在推进的信号。
    */
   private compactInFlight?: Promise<void>;
-  /** Latest runner-owned state, hydrated by start() and advanced by terminal events. */
+  /** 由运行器拥有的最新 state；通过 `start()` 加载，并随终止事件推进。 */
   private state?: TurnState;
-  /** True after `start()` has emitted the initial `turn_started` event. */
+  /** `start()` 发出初始 `turn_started` 事件后为 true。 */
   private started = false;
-  /** Aggregates model usage across parent agents, state agents, and memory work for one turn chain. */
+  /** 汇总一个 turn 工作链中父级 Agent、状态 Agent 和记忆处理的 model 用量。 */
   private turnUsage?: TurnTokenUsage;
-  /** Per-model partition of `turnUsage`; reset and populated in lockstep with it via `recordUsage`. */
+  /** `turnUsage` 按 model 划分的用量；通过 `recordUsage` 与其同步重置和填充。 */
   private turnUsageByModel?: ModelUsageEntry[];
   /**
-   * Snapshot of the latest parent assistant `message_end`'s bar fields.
-   * State-agent and terminal emissions reuse these so the bar/breakdown
-   * does not jitter mid-turn when only a state agent advanced cost.
+   * 最新父级 assistant `message_end` 的进度条字段快照。
+   * 状态 Agent 和终止事件会复用这些字段，因此仅状态 Agent 增加成本时，turn 中途的进度条/明细也不会跳变。
    *
-   * Always set by the time a state agent runs in production: the parent
-   * worker selects a state via a real LLM call, which emits `message_end`
-   * and populates this. Exposed as `protected` for test harnesses that
-   * stub `runAgentWorker` past the real parent path and need to seed the
-   * snapshot before driving a state-agent emission.
+   * 生产环境中，状态 Agent 运行时此值必定已设置：父级 worker 会通过真实 LLM 调用选择状态，该调用会发出 `message_end`
+   * 并填充此快照。此字段开放为 `protected`，供越过真实父级路径、替代 `runAgentWorker` 的测试
+   * harness 在触发状态 Agent 事件前设置快照。
    */
   protected lastParentUsageSnapshot?: {
     effectiveContextWindow: number;
     contextWindowUsage: TurnContextWindowUsage;
     lastMessageUsage: TurnTokenUsage;
   };
-  /** Ensures persisted memory hydrates once before the first turn that needs it. */
+  /** 确保在首次需要持久化记忆的 turn 前只加载一次。 */
   private memoryLoaded = false;
-  /** MCP servers connected during start(). Disposed on runner.dispose(). */
+  /** 在 `start()` 期间连接的 MCP 服务器；在运行器 `dispose()` 时释放。 */
   private mcpRuntime?: McpRuntime;
   protected readonly skillContext: SkillContext;
   protected readonly clock: RuntimeClock;
   protected readonly minimumScheduledDelayMs: number;
-  /** Foreground expiry yields a still-running result without cancelling the task. */
+  /** 前台等待超时会返回仍在运行的结果，而不会取消任务。 */
   protected readonly taskWaitBudgetMs: number;
 
   constructor(
@@ -648,45 +632,31 @@ export class TurnRunner {
   }
 
   /**
-   * Compact the runner's wire-visible message tail on demand by advancing
-   * the sticky `wireGuardHorizon` so the next request to the actor model
-   * dispatches a smaller prompt.
+   * 按需推进固定的 `wireGuardHorizon`，压缩运行器在 wire 上可见的消息尾部，
+   * 让下一次向 actor model 发出的请求使用更小的 prompt。
    *
-   * Critical: this does **not** mutate `state.agent.messages` or the live
-   * parent agent's transcript. The durable transcript is the source of
-   * truth for resume, snapshotting, observer/reflector passes, and the
-   * TUI scrollback; destroying it would lose information the wire-shaping
-   * pipeline is specifically designed to preserve. Instead this reuses
-   * the same horizon-advance mechanism that
-   * `createObservationalContextTransform` runs every turn — it just
-   * forces it now, against a tighter token target than the automatic
-   * trigger uses.
+   * 重要：此操作**不会**修改 `state.agent.messages` 或父级 Agent 的实时对话记录。持久化对话记录是恢复、
+   * 快照、观察/反思处理和 TUI 滚动历史的事实来源；删除它会丢失 wire-shaping
+   * 流程特意要保留的信息。这里复用 `createObservationalContextTransform` 每个 turn 都会运行的 horizon 推进机制，
+   * 只是立即执行，并使用比自动触发更严格的 token 目标。
    *
-   * Target selection:
-   *  - When the current wire-tail tokens exceed
-   *    `COMPACT_MESSAGE_TOKENS_RATIO` (20%) of the parent agent's
-   *    effective context window, the target is that 20% ceiling —
-   *    leaving 80% headroom for system prompt, memory packs, the next
-   *    user prompt, and the next assistant response.
-   *  - When the wire-tail is already under 20%, the target halves the
-   *    current wire-tail tokens instead. `compact` is user-initiated, so
-   *    even an already-light session must produce visible relief.
+   * 目标选择：
+   *   - 当前 wire 消息尾部的 token 数超过父级 Agent 有效上下文窗口的 `COMPACT_MESSAGE_TOKENS_RATIO`（20%）时，
+   *     目标设为该 20% 上限，为 system prompt、记忆包、下一条用户 prompt 和下一次 assistant 回复
+   *     留出 80% 空间。
+   *   - wire 消息尾部已低于 20% 时，目标改为当前尾部 token 数的一半。`compact` 由用户主动触发，
+   *     因此即使 Session 已经很轻，也应产生可见的改善。
    *
-   * On a successful horizon advance the memory context pack is refreshed
-   * (same fire-and-forget call the transform's `onCompaction` handler
-   * uses) so the rendered prefix lines up with the new horizon and the
-   * next prompt-cache fault is paid once instead of twice.
+   * 成功推进 horizon 后会刷新记忆上下文包（与转换器 `onCompaction` 处理器使用相同的 fire-and-forget 调用），
+   * 使渲染出的前缀与新 horizon 一致，并只支付一次 prompt 缓存失效成本，而不是两次。
    *
-   * Rejected with a soft warning while a parent pass is dispatching or while
-   * the turn loop is active without an in-process task. A running task opens
-   * the parent-idle window: its transcript is isolated from the parent wire
-   * horizon, so compact may safely advance that horizon between passes.
+   * 父级 pass 正在派发，或 turn 循环仍活动且没有进程内任务时，会发出非强制警告并拒绝操作。运行中的任务会开启
+   * 父级空闲窗口：它的对话记录与父级 wire horizon 隔离，因此可以安全地在 pass 之间推进 horizon。
    */
   async compact(): Promise<void> {
     this.requireStarted();
-    // Parent work owns the wire transcript and therefore closes the gate.
-    // In-process state work leaves the parent idle and opens it; scheduled
-    // waits have already settled the public turn and are open as well.
+    // 父级工作拥有 wire 对话记录，因此会关闭此门控。
+    // 进程内状态工作不会占用父级，使父级保持空闲并开放门控；定时等待已结束公开 turn，也同样开放。
     if (
       this.parentAgentRunning ||
       (this.activeTurnPromise && this.taskManager.pendingWork().kind !== "open") ||
@@ -701,12 +671,11 @@ export class TurnRunner {
       });
       return;
     }
-    // Publish the compact promise so concurrent `turn()` calls observe
-    // it and serialize behind us. Fire-and-forget callers (e.g. the TUI
-    // `/compact` slash command) would otherwise let a follow-up prompt
-    // dispatch with the pre-compact wire-tail and race the horizon
-    // mutation. The promise resolves to `void` after the inner body
-    // finishes, so `turn()` only needs to await, not inspect a result.
+    // 公布 compact promise，让并发的 `turn()` 调用能够观察到它
+    // 并排在其后。否则 fire-and-forget 调用方（例如 TUI
+    // `/compact` slash 命令）可能让后续 prompt 使用压缩前的 wire 消息尾部派发，
+    // 并与 horizon 修改竞争。内部逻辑完成后，promise 会以 `void` 完成，
+    // 因此 `turn()` 只需等待，无需检查结果。
     const inFlight = this.runCompact();
     this.compactInFlight = inFlight;
     try {
@@ -732,7 +701,7 @@ export class TurnRunner {
       const targetLabel = overCeiling
         ? `target ${target} = 20% of ${contextWindow}`
         : `target ${target} = 50% of current ${beforeTokens}`;
-      // Preserve the unobserved tail before the horizon walks past it.
+      // 在 horizon 越过尚未观察的消息尾部前，先保留它。
       await this.ensureMemoryCoverageForCompaction(observable);
       const newHorizon = findEvictionHorizon(
         observable,
@@ -757,17 +726,17 @@ export class TurnRunner {
         level: "info",
         message: `compact: dropped ${dropped} older wire message(s); wire-tail ~${beforeTokens} → ~${afterTokens} tokens (${targetLabel}).`,
       });
-      // Refresh the sidebar's context bar so the breakdown reflects the
-      // new horizon immediately rather than waiting for the next parent
-      // `message_end` to re-anchor `lastMessageUsage`. Without this the
-      // bar keeps showing the pre-compact `184k / 200k` slice even though
-      // the next request will dispatch a much smaller wire tail.
+      // 立即刷新侧边栏上下文进度条，使明细反映
+      // 新 horizon，而不必等待下一个父级
+      // `message_end` 重新锚定 `lastMessageUsage`。否则，
+      // 即使下一次请求将派发小得多的 wire 消息尾部，进度条仍会显示压缩前的
+      // `184k / 200k` 数值。
       this.emitPostCompactUsage();
     } catch (error) {
-      // The drain and pack-refresh have their own try/catch; this outer
-      // catch guards against an unexpected throw in the horizon-advance
-      // path so `runCompact` always settles cleanly and `compactInFlight`
-      // resets via the caller's finally.
+      // 排空和刷新记忆包各自有 try/catch；此处的外层
+      // catch 用于捕获 horizon 推进路径中的意外异常，
+      // 确保 `runCompact` 始终正常结束，并由调用方的 finally
+      // 重置 `compactInFlight`。
       this.emit({
         type: "system",
         level: "warn",
@@ -779,16 +748,14 @@ export class TurnRunner {
   }
 
   /**
-   * Set up a session before any turn runs. Resolves the initial state (a fresh
-   * state, or the resumed state when `command.state` is provided), hydrates
-   * every independent resource concurrently, builds the parent agent, then
-   * emits `turn_started`. No agent work runs.
+   * 在任何 turn 运行前准备 Session。解析初始 state（新建的 state，
+   * 或通过 `command.state` 提供的恢复 state），并发加载所有独立资源，构建父级 Agent，最后
+   * 发出 `turn_started`。此过程不会运行 Agent 工作。
    *
-   * `turn_started` is the readiness contract: it fires only once connected
-   * tokens, durable memory, skills, MCP tools, and the routing table are all
-   * live, so the first prompt never races a half-built runtime. Callers
-   * (CLI/TUI/session managers) call this once on launch so the user sees
-   * available skills before typing the first prompt.
+   * `turn_started` 是就绪契约：只有在连接凭据、持久化记忆、技能、MCP 工具和路由表都已
+   * 就绪时才会发出，因此首条 prompt 不会与尚未构建完成的运行时发生竞态。调用方
+   * （CLI/TUI/Session 管理器）会在启动时调用一次，使用户在输入首条 prompt 前就能看到
+   * 可用技能。
    */
   async start(command: TurnStartCommand): Promise<TurnState> {
     const startupStartedAt = performance.now();
@@ -800,11 +767,10 @@ export class TurnRunner {
     };
     const mode = command.mode ?? this.config.mode ?? "auto";
     let state = command.state ?? createInitialTurnState(mode, command.options);
-    // These phases populate disjoint runner/global state: connected-provider
-    // credentials, memory persistence/cache, MCP runtime, routing table, and
-    // skill context. Parent-agent construction below is their first consumer.
-    // Start skills last because its filesystem discovery is synchronous; the
-    // async token, memory, MCP, and routing work can make progress meanwhile.
+    // 这些阶段会填充互不重叠的运行器/全局 state：已连接 provider
+    // 凭据、记忆持久化/缓存、MCP 运行时、路由表和
+    // 技能上下文。下面的父级 Agent 构建会首次使用这些资源。
+    // 技能加载最后启动，因为它的文件系统发现是同步的；与此同时，异步凭据、记忆、MCP 和路由工作可以并行推进。
     const startupResults = await Promise.allSettled([
       measure("connected_tokens", () => ensureFreshConnectedTokens()),
       measure("memory", () => this.ensureMemoryLoaded()),
@@ -814,7 +780,7 @@ export class TurnRunner {
           cwd: this.config.cwd ?? process.cwd(),
           catalogAdapter: routingCatalogAdapter,
         });
-        // A saved chat selection may belong to this table rather than the catalog.
+        // 已保存的聊天选择可能属于此路由表，而不是模型目录。
         if (command.state) {
           state = restoreSavedExecutionSelections(
             command.state,
@@ -855,7 +821,7 @@ export class TurnRunner {
     if (lostSnapshots.length > 0) {
       this.recoveredTaskReminder = lostTaskRecoveryReminder(lostSnapshots);
       while (this.taskManager.nextSettled()) {
-        // Recovery is delivered through the one-shot reminder, not the live settlement lane.
+        // 恢复信息通过一次性提醒传递，而不是通过实时结算通道。
       }
     }
     this.hydratedQueuedCommands = state.queuedCommands ? [...state.queuedCommands] : undefined;
@@ -876,11 +842,10 @@ export class TurnRunner {
           : undefined,
       nextTaskId: this.taskManager.nextTaskId(),
     };
-    // Hydrate the wire-shaping object in place. `this.wireGuardHorizon` is
-    // referenced by the observational context transform; replacing the
-    // reference would orphan the transform's view. `Object.assign` over
-    // the fresh default lets the persisted state contribute every field
-    // it carries without this code knowing the field list.
+    // 在原对象上加载 wire-shaping 对象。`this.wireGuardHorizon` 被
+    // 观察上下文转换器引用；若替换引用，转换器就会失去原有视图。对
+    // 新建的默认对象执行 `Object.assign`，可将持久化 state 中已有的所有字段
+    // 复制进来，而无需在此处维护字段列表。
     if (state.wireGuardHorizon) {
       Object.assign(this.wireGuardHorizon, state.wireGuardHorizon);
     }
@@ -895,28 +860,26 @@ export class TurnRunner {
   }
 
   /**
-   * Route a turn-driving command and resolve with the shared chain terminal.
-   * `onAccepted` fires only after the command has entered the active driver or
-   * the runner-owned queue; transports can acknowledge delivery at that
-   * boundary without leaking transport metadata into durable turn state.
+   * 路由处理 turn 驱动命令，并解析为工作链共用的终止结果。
+   * `onAccepted` 只有在命令进入活动驱动器或
+   * 运行器自有队列后才会触发；传输层可在该边界确认投递，
+   * 而无需将传输元数据泄漏到持久化 turn state 中。
    */
   async turn(command: TurnCommand, onAccepted?: () => void): Promise<TurnTerminalEvent> {
     this.requireStarted();
     await ensureFreshConnectedTokens();
     await this.ensureMemoryLoaded();
     await this.ensureSkillsLoaded();
-    // Serialize behind an in-flight compact. Compact advances the wire
-    // horizon and may write observations to the durable store; a turn
-    // started concurrently would dispatch the pre-compact wire-tail and
-    // race the horizon mutation. Awaiting here gives fire-and-forget
-    // callers (TUI `/compact` then a prompt) the same ordering RPC mode
-    // gets for free by awaiting `compact` between iterations.
+    // 串行等待正在执行的 compact。Compact 会推进 wire
+    // horizon，并可能向持久化存储写入观察记录；若并发启动 turn，它会派发压缩前的 wire 消息尾部，
+    // 与 horizon 修改发生竞态。在这里等待，可让 fire-and-forget
+    // 调用方（TUI 先 `/compact` 再发 prompt）获得与 RPC 模式相同的顺序保证；RPC 模式会在每轮之间等待 `compact`。
     if (this.compactInFlight) {
       await this.compactInFlight;
     }
     if (this.activeTurnPromise) {
-      // turn() is the concurrency boundary: repeated calls extend or queue
-      // behind the active chain instead of creating a separate parent transcript.
+      // `turn()` 是并发边界：重复调用会扩展当前工作链或排在其后，
+      // 而不会创建独立的父级对话记录。
       this.handleCommandDuringActiveTurn(command);
       onAccepted?.();
       return this.activeTurnPromise;
@@ -1010,11 +973,10 @@ export class TurnRunner {
             runnableIndex >= 0 ? this.parentInputs.splice(runnableIndex, 1)[0] : undefined;
           if (!input) {
             if (pendingBeforeInput.kind !== "open") {
-              // The loop is out of work: this is the moment the turn ends, and
-              // the only point every park reaches. A park selected while
-              // transitioning out of a completed state returns no outcome at all,
-              // so hooking the terminal result instead would miss every park
-              // after the first.
+              // 循环没有可执行工作时，turn 就在此刻结束；
+              // 每次 park 都会经过这里。状态完成后的转换中若选择了 park，
+              // 不会返回任何结果，因此若改为监听终止结果，
+              // 第一次之后的 park 都会被漏掉。
               const pendingTransition = this.requireRunnerState().pendingStateTransition;
               if (pendingTransition && !this.stateMachine?.terminal) {
                 this.parentInputs.push({
@@ -1045,9 +1007,9 @@ export class TurnRunner {
               break;
             }
             const running = this.taskManager.list().filter((task) => task.status === "running");
-            // A live state worker still owns its work. Once it returns, give the
-            // parent one cleanup opportunity per task instead of silently parking
-            // its transition behind a server that may never exit on its own.
+            // 正在运行的状态 worker 仍拥有其工作。它返回后，针对每个任务给
+            // 父级一次清理机会，而不是静默地将状态转换
+            // 挂在可能永远不会自行退出的服务器之后。
             if (
               !running.some((task) => this.stateTasks.has(task.id)) &&
               running.some((task) => !remindedTasks.has(task.id))
@@ -1072,9 +1034,9 @@ export class TurnRunner {
           const result = await this.processParentLoopInput(input);
           if (result?.type === "ask") {
             if (this.taskManager.pendingWork().kind === "open") {
-              // Terminal ⇒ quiescent forbids delivering the ask now. Keep the
-              // questions just long enough to remind the parent on its next pass
-              // (settlements guarantee one); the parent re-asks if still relevant.
+              // 终止后进入静默状态，当前禁止立即投递 ask。暂存
+              // 问题，仅用于在父级下一次 pass 中提醒它
+              // （任务结算会保证有下一次 pass）；如果问题仍相关，父级会重新提问。
               this.withheldAskQuestions = result.questions;
             } else {
               questions = result.questions;
@@ -1082,8 +1044,8 @@ export class TurnRunner {
           }
           if (result?.type === "interrupted") this.interruptReason ??= "Interrupted";
           if (result?.type === "state_completed") {
-            // Reconsider tasks carried across states at each worker boundary,
-            // without re-prompting merely because the parent chose to wait.
+            // 在每个 worker 边界重新检查跨状态保留的任务，
+            // 不要仅仅因为父级选择等待就再次提示。
             remindedTasks.clear();
             this.setState({
               ...this.requireRunnerState(),
@@ -1107,9 +1069,9 @@ export class TurnRunner {
             }
           }
 
-          // Preserve the old drain rule: follow-ups arriving after a sleep was
-          // selected remain queued for the next user-driven turn. A stale wake,
-          // however, is skipped above so it cannot clobber the meaningful result.
+          // 保留旧的排空规则：选择 sleep 后到达的 follow-up
+          // 继续排队，留给下一次用户驱动的 turn。上面的逻辑会跳过过期的 wake，
+          // 避免它覆盖有意义的结果。
           if (retainSleepingFollowUps()) {
             break;
           }
@@ -1137,10 +1099,10 @@ export class TurnRunner {
             quiescentState.options,
           );
         } catch (error) {
-          // Memory is bookkeeping, never the turn's outcome. A failed
-          // observation just leaves the message tail unobserved for the next
-          // pass to retry — the same best-effort contract the compaction
-          // call sites (ensureMemoryCoverageForCompaction) already use.
+          // 记忆只是记录工作，不应决定 turn 的结果。观察失败时，
+          // 消息尾部只会暂时未被观察，留待下一次
+          // pass 重试——这与压缩
+          // 调用点（`ensureMemoryCoverageForCompaction`）采用相同的尽力而为契约。
           this.emit({
             type: "system",
             level: "warn",
@@ -1150,7 +1112,7 @@ export class TurnRunner {
           });
         }
       }
-      // Completion still owns runnable inputs accepted while bookkeeping was awaiting.
+      // 记录工作等待期间接受的可运行输入，仍由当前完成流程处理。
       if (
         !this.interruptReason &&
         !questions &&
@@ -1201,8 +1163,8 @@ export class TurnRunner {
 
   private handleCommandDuringActiveTurn(command: TurnCommand): void {
     if ((command.type === "prompt" || command.type === "answer") && this.parentAgentRunning) {
-      // The parent pi-agent is currently driving the public terminal event, so
-      // user input can go straight to pi using pi's native steer/follow-up queues.
+      // 父级 pi-agent 正在驱动公开终止事件，因此
+      // 用户输入可直接使用 pi 原生的 steer/follow-up 队列发送给 pi。
       if (command.behavior === "follow_up") {
         this.appendFollowUpPrompt(this.commandToUserMessage(command), command.images);
       }
@@ -1242,11 +1204,10 @@ export class TurnRunner {
   }
 
   /**
-   * Block until something the loop has not seen yet arrives: a parent input
-   * or a task settlement. Only called once the loop has found nothing
-   * runnable, so whatever is already queued must not count as activity —
-   * `enqueueAvailableSettlements` keeps the task manager's queue drained for
-   * exactly that reason.
+   * 阻塞等待循环尚未处理的事项到达：父级输入
+   * 或任务结算。只有循环确认没有可运行项后才会调用此方法，
+   * 因此已经排队的内容不能算作新活动——
+   * `enqueueAvailableSettlements` 正是为了此目的而排空任务管理器队列。
    */
   private async waitForLoopActivity(): Promise<void> {
     let wake!: () => void;
@@ -1262,11 +1223,10 @@ export class TurnRunner {
   }
 
   /**
-   * Move every settlement off the task manager into the held buffer. The
-   * manager's queue must never keep a settlement the loop has already seen:
-   * `waitForSettlement` reads a non-empty queue as fresh activity, and a
-   * loop holding settlements behind a foreground wait would then re-run on
-   * every microtask without ever yielding to the I/O that ends the wait.
+   * 将所有结算从任务管理器移入暂存缓冲区。
+   * 管理器队列绝不能保留循环已经看到的结算：
+   * `waitForSettlement` 会把非空队列视为新活动；若循环在前台等待期间持有结算，
+   * 就会在每个微任务中重复运行，却始终无法让出控制权，等待结束该等待的 I/O。
    */
   private holdSettledTasks(): void {
     for (
@@ -1435,10 +1395,9 @@ export class TurnRunner {
   }
 
   /**
-   * Drop the first queued entry whose `message` text matches. Pi-agent's
-   * persisted transcript only retains the text portion of multimodal user
-   * content, so the text is the canonical dedup key for both live and
-   * replayed follow-ups.
+   * 删除首个 `message` 文本匹配的排队项。Pi-agent 的
+   * 持久化对话记录只保留多模态用户内容中的文本部分，因此文本是实时和
+   * 回放 follow-up 共用的规范去重键。
    */
   private removeFollowUpPrompt(message: string): void {
     const entries = this.getFollowUpQueue();
@@ -1465,12 +1424,10 @@ export class TurnRunner {
     this.interruptReason = "Interrupted";
     this.parentAgentInterrupted = this.parentAgentRunning;
     this.parentAgent?.abort();
-    // Known issue: these queues can hold user prompts that were accepted
-    // mid-turn (steer/follow_up) but not yet consumed by the model. Clearing
-    // them discards those prompts even though the caller was already told they
-    // were delivered, so an interrupt races a just-sent message and can drop
-    // it. Accepted as an edge case for now; a fix would re-emit unconsumed
-    // user prompts as pending input for the next turn instead of clearing.
+    // 已知问题：这些队列可能包含 turn 中途已接受、
+    // 但模型尚未消费的用户 prompt（steer/follow_up）。清空队列会丢弃这些 prompt，尽管调用方已被告知它们
+    // 已投递；因此中断若恰好与刚发送的消息竞态，就可能丢失消息。暂时接受此边缘情况；修复方式是将尚未消费的
+    // 用户 prompt 重新作为待处理输入发出，留给下一次 turn，而不是直接清除。
     this.parentAgent?.clearAllQueues();
     this.parentInputs.length = 0;
     this.clearFollowUpQueue();
@@ -1556,8 +1513,8 @@ export class TurnRunner {
       continuation: true,
     });
     this.setState(worker.outcome.state);
-    // A failed terminal here would leave the loop waiting on tasks that may
-    // never exit; throwing ends the turn and reaps them.
+    // 如果此处失败的终止结果被返回，循环会继续等待可能
+    // 永远不会退出的任务；抛出异常会结束 turn 并回收这些任务。
     if (worker.outcome.type === "complete" && worker.outcome.status === "failed") {
       throw new Error(worker.outcome.error ?? "Background task cleanup failed.");
     }
@@ -1653,9 +1610,9 @@ export class TurnRunner {
         }
       : input;
     const parked = currentParkState(this.stateMachine);
-    // Append to the pass already being made, so a transition out of park costs
-    // no extra model call. The selection tools put the same reminder in their
-    // terminating result on the entry pass, before currentState has changed.
+    // 将提醒附加到当前即将执行的 pass，因此离开 park 的转换
+    // 不需要额外的 model 调用。选择工具会在进入状态时的 pass 中
+    // 将同一提醒放入终止结果，此时 currentState 尚未改变。
     return this.runAgentWorker(
       parked
         ? { ...recoveryInput, prompt: `${recoveryInput.prompt}\n\n${parkNudge(parked.name)}` }
@@ -1690,10 +1647,10 @@ export class TurnRunner {
   }
 
   /**
-   * Fold a finished continuation pass into a loop outcome: an interrupt, an ask,
-   * whatever control action the parent emitted, or the turn's completion. Every
-   * runner-owned continuation settles the same way, so they share this instead
-   * of each re-deriving the precedence between those four.
+   * 将已完成的延续 pass 归并为循环结果：中断、ask、
+   * 父级发出的任意控制操作，或 turn 完成。所有
+   * 运行器拥有的延续 pass 都以相同方式结算，因此共用此方法，
+   * 而不分别重新推导这四种结果的优先顺序。
    */
   private async settleContinuationPass(
     worker: AgentWorkerResult,
@@ -1712,11 +1669,10 @@ export class TurnRunner {
   }
 
   /**
-   * Spend one extra parent pass before a completed turn ends while the machine
-   * is still parked. `runParentPass` appends {@link parkNudge} on its own, so
-   * this only supplies the "your turn is ending" framing. Ending the turn again
-   * is a legitimate outcome — the pass is a nudge, not an obligation — so
-   * whatever the parent does next settles the turn normally.
+   * 状态机仍处于 park 时，若 turn 即将以完成状态结束，就额外运行一次父级 pass。
+   * `runParentPass` 会自行附加 {@link parkNudge}，因此这里仅提供“你的 turn 即将结束”这一提示。再次结束 turn
+   * 也是合法结果——此 pass 只是提醒，并非强制要求——所以
+   * 父级接下来的任何操作都会按正常方式结算 turn。
    */
   private async runParkNudgePass() {
     const worker = await this.runParentPass({
@@ -1729,16 +1685,11 @@ export class TurnRunner {
   }
 
   /**
-   * Queue that nudge pass when a turn that succeeded is about to end with the
-   * machine parked. A park holds without scheduling any wake, so nothing else
-   * would ever resume the machine: if the parent parked and then simply forgot
-   * to transition, this is the last moment anyone can catch it. Spending the
-   * nudge once per executed state keeps a parent that legitimately waits for
-   * the user from being nagged into transitioning, while a loop that parks
-   * between real work rounds still gets a nudge each round (see
-   * {@link executePlannedWork}). Anything still pending — running work, or a
-   * scheduled wake that will resume the machine on its own — means the turn is
-   * not ending on a stalled park, so there is nothing to remind anyone about.
+   * 成功的 turn 即将结束且状态机处于 park 时，排入一次提醒 pass。Park 不会安排唤醒，因此不会有其他机制
+   * 恢复状态机：若父级进入 park 后忘记转换，这就是最后一次能发现问题的机会。每个已执行状态只花费一次提醒，
+   * 因此父级确实在等待用户时不会被催促转换；而在实际工作轮次之间 park 的循环，每轮仍会收到提醒（见
+   * {@link executePlannedWork}）。只要仍有待处理工作——正在运行的任务或会自行恢复状态机的定时唤醒——就说明 turn
+   * 并非因停滞的 park 而结束，无需提醒。
    */
   private queueParkNudgeIfDue(status: "completed" | "failed", pending: PendingWork): boolean {
     if (
@@ -1761,18 +1712,17 @@ export class TurnRunner {
       continuation: true,
     });
     this.setState(worker.outcome.state);
-    // Only ever queued in agent mode, so the shared settle's state-machine
-    // branch is unreachable here.
+    // 此操作只会在 Agent 模式排入，因此共用结算逻辑中的状态机
+    // 分支在这里不可达。
     return this.settleContinuationPass(worker);
   }
 
   /**
-   * Queue a fresh parent continuation only when a completed agent-mode turn did enough work to
-   * benefit from review. A successful consultation with no subsequent real-world tool work already
-   * saw the final available evidence and satisfies this checkpoint without call counting. Otherwise
-   * completion starts a distinct consultation phase, so its first call gets a fresh ordinary floor
-   * even when the orientation call was recent. The checkpoint is marked before enqueueing so
-   * failures and ignored reminders remain non-recursive.
+   * 只有已完成的 Agent 模式 turn 完成了足够多工作、确实能从审查中
+   * 受益时，才排入新的父级延续 pass。若成功咨询后没有再执行任何实际工具工作，则顾问已经
+   * 看到最后可用的证据；无需统计调用次数，这本身就满足此检查点。否则，完成会开启独立的顾问阶段，因此该阶段首次调用会获得新的常规下限，
+   * 即使刚刚执行过方向判断调用也是如此。先标记检查点再入队，可避免
+   * 失败和被忽略的提醒递归触发。
    */
   private queueAdvisorCompletionReviewIfDue(
     status: "completed" | "failed" | "cancelled" | "error",
@@ -1788,10 +1738,10 @@ export class TurnRunner {
     ) {
       return false;
     }
-    // Completion review is a distinct product lifecycle phase, just like a
-    // replacement model starts a fresh phase after a route switch. Reset the
-    // step floor instead of bypassing the advisor gate so the ordinary
-    // in-flight reservation and post-success cooldown still apply.
+    // 完成审查是独立的产品生命周期阶段，类似于
+    // 路由切换后新 model 开始一个新阶段。重置
+    // 步骤下限，而不是绕过顾问门控，以继续遵守常规的
+    // 进行中预留和成功后的冷却时间。
     this.modelRouter?.resetAdvisorCooldown();
     this.parentInputs.unshift({ type: "advisor_completion_review" });
     return true;
@@ -1844,9 +1794,8 @@ export class TurnRunner {
       return settled.outcome;
     }
     if ("park" in work) return undefined;
-    // Running a state is progress, so the end-of-turn park nudge is spendable
-    // again on the next park. A parent that only re-parks runs nothing, never
-    // reaches this line, and so is nudged at most once.
+    // 运行状态代表进展，因此下次进入 park 时可再次使用 turn 结束提醒。
+    // 若父级只是重复进入 park，没有运行任何工作，就永远不会到达此行，因此最多只会提醒一次。
     this.parkNudged = false;
     if ("subagent" in work.run) {
       this.startSubagentTask(work.run.subagent, work.run.stateName, selection);
@@ -1949,10 +1898,9 @@ export class TurnRunner {
         const finishedPromise = new Promise<void>((resolve) => {
           finish = resolve;
         });
-        // Stop semantics are uniform across executors: process groups die by SIGKILL
-        // immediately (matching pi-bash), so the interrupted terminal is never gated
-        // on a grace window. Graceful TERM cleanup, if ever needed, is a future
-        // explicit opt-in, not a blanket default.
+        // 所有执行器的停止语义一致：进程组会立即通过 SIGKILL 终止
+        // （与 pi-bash 一致），因此中断终止事件不必等待宽限期。
+        // 如果将来需要优雅的 TERM 清理，应作为显式选择加入，而不是默认对所有任务启用。
         const unregisterReaper = this.taskManager.registerReaper(async (reason) => {
           shell.interrupt(reason);
           await finishedPromise;
@@ -2125,7 +2073,7 @@ export class TurnRunner {
     await Promise.all(scheduled.map((task) => this.taskManager.stop(task.id, reason)));
   }
 
-  /** A recovery prompt describes repeated effective work without forbidding legitimate retries. */
+  /** 恢复 prompt 用于说明重复的有效工作，但不会禁止合理重试。 */
   private repeatedSelectionLoopWarning(stateName: string): string | undefined {
     const session = this.stateMachine;
     const count = session ? repeatedSelectionLoopCount(session, stateName) : undefined;
@@ -2182,13 +2130,12 @@ export class TurnRunner {
   }
 
   /**
-   * Shared bounded-retry loop for transitions the parent owes the machine.
-   * Re-prompts up to `PARENT_TRANSITION_RETRY_BUDGET` times with `buildPrompt`
-   * (the second and later attempts carry a retry reminder); the first accepted
-   * selection ends enforcement, with an immediate outcome only for synchronous
-   * work. Exhaustion after completed work asks for an explicit continuation,
-   * preserving the decision and output. Recovery without a completed result
-   * still records an error terminal carrying `failureReason`.
+   * 供父级履行状态机转换义务时共用的有界重试循环。
+   * 通过 `buildPrompt` 重新提示，最多重试 `PARENT_TRANSITION_RETRY_BUDGET` 次
+   * （第二次及之后的尝试会附带重试提醒）；首次被接受的选择会结束强制流程，只有同步
+   * 工作会立即产生结果。已完成工作重试耗尽时会请求明确继续，
+   * 并保留决策和输出。若恢复时没有已完成结果，
+   * 仍会记录带有 `failureReason` 的错误终止结果。
    */
   private async enforceParentTransition(
     buildPrompt: (retryInstruction: string | undefined) => string,
@@ -2211,8 +2158,8 @@ export class TurnRunner {
         workerResult.outcome.state,
       );
       if (result) return result;
-      // Starting an asynchronous state has no immediate outcome. The select
-      // control itself proves the transition obligation was satisfied.
+      // 启动异步状态不会立即产生结果。select
+      // 控制操作本身就证明转换义务已经履行。
       if (workerResult.control.type === "select_state_machine_state") return undefined;
     }
 
@@ -2268,7 +2215,7 @@ export class TurnRunner {
     });
   }
 
-  /** Build a public spawn only after TaskManager has allocated its identity and child scope. */
+  /** 只有在 TaskManager 分配身份和子作用域后，才创建公开的 spawn。 */
   protected async createSpawnedSubagentRun(
     publicSpec: SubagentSpec,
     taskId: TaskId,
@@ -2305,7 +2252,7 @@ export class TurnRunner {
     );
   }
 
-  /** Stateless spawn classifier seam; deliberately never consults the session ModelRouter. */
+  /** 无状态的 spawn 分类器接缝；特意不查询 Session 的 ModelRouter。 */
   protected async selectSpawnModel(prompt: string, parentSetting: string) {
     const table = this.routingTable ?? BUILT_IN_ROUTING_TABLE;
     return classifySpawnModel(prompt, parentSetting, {
@@ -2333,7 +2280,7 @@ export class TurnRunner {
     return this.stateMachine;
   }
 
-  /** Protected so test probes can supply a scope when driving tools outside a turn. */
+  /** 设为 `protected`，以便测试探针在 turn 之外驱动工具时提供作用域。 */
   protected requireRootScope(): ScopeId {
     if (!this.activeRootScopeId) throw new Error("No turn root scope is active.");
     return this.activeRootScopeId;
@@ -2431,13 +2378,12 @@ export class TurnRunner {
       tasks: [...this.taskManager.list()],
       taskOutputTails: this.snapshotTaskOutputTails(),
       nextTaskId: this.taskManager.nextTaskId(),
-      // Carry wire-shaping state through every snapshot so persistence
-      // layers (state.json, terminal payloads, getState consumers) see
-      // the current value. Copy by spread so consumers can't mutate the
-      // runner's live object. Omit when nothing has moved off the
-      // fresh-runner default so untouched sessions stay schema-clean;
-      // `evictionHorizon` is the only field today, so it doubles as the
-      // dirty sentinel — revisit when more wire-shaping fields land.
+      // 在每个快照中传递 wire-shaping state，使持久化
+      // 层（`state.json`、终止 payload、`getState` 调用方）都能看到
+      // 当前值。通过展开复制，避免调用方修改
+      // 运行器的实时对象。如果值仍等于新运行器默认值，则省略它，让未变更的 Session 保持 schema 简洁；
+      // 目前只有 `evictionHorizon` 一个字段，因此它也充当
+      // 变更标记——新增 wire-shaping 字段时需重新评估。
       ...(this.wireGuardHorizon.evictionHorizon > 0
         ? { wireGuardHorizon: { ...this.wireGuardHorizon } }
         : {}),
@@ -2457,10 +2403,10 @@ export class TurnRunner {
   }
 
   /**
-   * Caps the size of every state that leaves the runner via emit/return/
-   * getState. Runs only when `TurnRunnerConfig.autoStateCompaction` is
-   * enabled — the single choke point ensures persistence layers, terminal
-   * payloads, and external observers all see the same trimmed state.
+   * 限制通过 emit/return/
+   * `getState` 离开运行器的每个 state 大小。仅在启用
+   * `TurnRunnerConfig.autoStateCompaction` 时运行——这个唯一的收口点确保持久化层、终止
+   * payload 和外部观察者看到的都是同一份裁剪后 state。
    */
   private applyAutoStateCompaction(state: TurnState): TurnState {
     const options = this.resolveCompactionOptions();
@@ -2475,9 +2421,9 @@ export class TurnRunner {
   }
 
   private resolveCompactionOptions(): AutoStateCompactionOptions | undefined {
-    // On by default: `undefined` and `true` both enable the 100 MB ceiling so
-    // unbounded `state.json` growth can't wedge persistence. Only an explicit
-    // `false` disables compaction.
+    // 默认开启：`undefined` 和 `true` 都会启用 100 MB 上限，防止
+    // `state.json` 无限制增长导致持久化卡死。只有显式设为
+    // `false` 才会关闭压缩。
     const setting = this.config.autoStateCompaction;
     if (setting === false) return undefined;
     if (setting === undefined || setting === true) return {};
@@ -2511,10 +2457,10 @@ export class TurnRunner {
     this.setState({ ...this.state, todos: [...todos] });
   }
 
-  // When a new turn begins with a todo list whose items are all in terminal
-  // states (completed or failed), the list no longer reflects work in progress.
-  // Clear it so the user-visible todos panel resets and the next turn does not
-  // carry a stale reminder forward.
+  // 新 turn 开始时，如果 todo 列表中的项目都处于终止
+  // 状态（completed 或 failed），列表便不再代表进行中的工作。
+  // 清空列表以重置用户可见的 todos 面板，并避免下一 turn
+  // 继续携带过时提醒。
   private clearFinishedTodosAtTurnStart(state: TurnState): TurnState {
     const todos = state.todos;
     if (!todos || todos.length === 0) return state;
@@ -2543,29 +2489,27 @@ export class TurnRunner {
 
   private initializeParentAgent(): void {
     const state = this.requireRunnerState();
-    // Routing-guidance layers travel alongside the tools they describe.
-    // Each tool keeps its own description lean (how to call it, what the
-    // params mean) and the "when to reach for it" guidance lives here so
-    // the agent learns the trigger patterns the user actually types.
-    //  - state-machine layer: appended in non-`agent` modes where
-    //    state-machine tools are exposed; `auto` mode is the case that
-    //    matters most because the agent must decide between todo_write
-    //    and create_state_machine_definition.
-    //  - recall-memory layer: appended whenever durable memory persistence
-    //    is wired up, so the agent reaches for `recall_memory` on
-    //    cross-session questions ("what did you do yesterday", "didn't
-    //    we ship X already?") instead of hedging.
+    // 路由指导层与其描述的工具一同传递。
+    // 每个工具的描述保持精简（说明如何调用、参数
+    // 含义是什么）；“何时使用该工具”的指导放在这里，使
+    // Agent 学会识别用户实际输入的触发模式。
+    //   - 状态机层：在公开状态机工具的非 `agent` 模式中附加；
+    //     最重要的是 `auto` 模式，因为 Agent 必须在 todo_write
+    //     与 create_state_machine_definition 之间作出选择。
+    //   - 回忆记忆层：只要已接入持久化记忆就附加，使 Agent 在跨 Session 问题
+    //     （“你昨天做了什么”“我们不是已经发布 X 了吗？”）中使用 `recall_memory`，
+    //     而不是含糊作答。
     const layers = [
       state.mode === "agent"
         ? undefined
         : createStateMachineSystemPromptLayer({ mode: state.mode, session: state }),
       this.config.memoryDbPath !== undefined ? createRecallMemorySystemPromptLayer() : undefined,
-      // Advisor timing guidance ships with the tool: description-only
-      // steering measurably under-triggers consults on hard tasks.
+      // 顾问的时机指导随工具一同提供：仅靠工具描述进行
+      // 引导，会明显减少困难任务中的顾问调用。
       this.advisorPolicy?.enabled ? ADVISOR_EXECUTOR_GUIDANCE_LAYER : undefined,
-      // Source-of-truth-first guidance always applies: even without
-      // configured memory, the agent should still prefer live tools,
-      // skills, and files in cwd over guessed answers.
+      // 事实来源优先的指导始终适用：即使未配置
+      // 记忆，Agent 也应优先使用 cwd 中的实时工具、
+      // 技能和文件，而不是猜测回答。
       createSourceOfTruthSystemPromptLayer(),
     ].filter((layer): layer is string => Boolean(layer));
     const appendSystemPrompt = layers.length > 0 ? layers.join("\n\n") : undefined;
@@ -2595,11 +2539,11 @@ export class TurnRunner {
       return { type: "ask", questions: control.questions };
     }
     if (control.type === "create_state_machine_definition") {
-      // A create that reaches here was authorized by the tool: it only emits
-      // this control result when no machine is active OR the agent opted into
-      // replaceActive. So an active, non-terminal session at this point means
-      // the agent deliberately chose to replace it — supersede it (recording a
-      // `cancelled` terminal) before installing the new machine in its place.
+      // 执行到这里的 create 已由工具授权：只有没有活动状态机，
+      // 或 Agent 主动选择 `replaceActive` 时，工具才会发出
+      // 此控制结果。因此此处若仍有活动的非终止 Session，就表示
+      // Agent 有意替换它；先 supersede 旧状态机（记录
+      // `cancelled` 终止结果），再安装新状态机。
       const active = this.stateMachine;
       if (active && !active.terminal) {
         await this.replaceActiveStateTasks("Replaced by a new state machine.");
@@ -2638,8 +2582,8 @@ export class TurnRunner {
     await this.replaceActiveStateTasks("Replaced by a newly selected state.");
     await this.cancelScheduledTasks("Replaced by a newly selected state.");
     const planned = planDecision(this.requireStateMachine(), decision, this.clock.now());
-    // A cleanup or user-steer pass can satisfy the transition before its queued
-    // reminder runs. That old state's obligation must not drive a second select.
+    // 清理或用户 steer pass 可能会在排队提醒运行前完成转换。
+    // 旧状态的转换义务不应因此触发第二次选择。
     for (let index = this.parentInputs.length - 1; index >= 0; index--) {
       if (this.parentInputs[index]?.type === "transition_enforcement") {
         this.parentInputs.splice(index, 1);
@@ -2652,8 +2596,8 @@ export class TurnRunner {
 
   private async replaceActiveStateTasks(reason: string): Promise<void> {
     const pending = [...this.stateTasks.entries()];
-    // A worker stopped during the parent pass can still have its settlement
-    // queued. Retire every old state's result before selecting replacement work.
+    // 父级 pass 期间停止的 worker，其结算结果仍可能已在队列中。
+    // 选择替代工作前，先作废所有旧状态的结果。
     for (const [id] of pending) this.ignoredTaskSettlements.add(id);
     const active = pending.filter(
       ([id]) => this.taskManager.output(id)?.descriptor.status === "running",
@@ -2694,8 +2638,8 @@ export class TurnRunner {
       getSession: () => this.memoryPersistence?.session,
       embed: this.memoryPersistence?.embed,
       sessionId: childContext?.memorySessionId ?? this.config.sessionId,
-      // Reuse the resolved memory model so recall_memory's optional
-      // expand flag goes to the same cheap model the observer uses.
+      // 复用已解析的 memory model，使 `recall_memory` 可选的
+      // expand 标志使用与观察器相同的低成本 model。
       expansionModel: this.resolveMemoryActorModel(undefined),
     };
     const router = this.modelRouter;
@@ -2851,9 +2795,9 @@ export class TurnRunner {
   }
 
   /**
-   * Keep ordinary advisor calls raw when already efficient. Above the soft
-   * target, drain older work through the normal memory observer and project it
-   * with an advisor-owned horizon so the executor's next request is unchanged.
+   * 普通顾问调用在上下文仍高效时保持原样。超过软
+   * 目标后，通过常规记忆观察器排空较早的工作，并用顾问专属 horizon 投影，
+   * 从而不改变执行器的下一次请求。
    */
   protected async captureContextForAdvisor(
     contextWindowTokens: number,
@@ -2910,9 +2854,9 @@ export class TurnRunner {
   }
 
   /**
-   * Pass-prep applied to EVERY parent pass, including harness overrides of
-   * `runAgentWorker` (they must call this first). One-shot reminders that must
-   * reach "whatever parent pass runs next" live here.
+   * 应用于每个父级 pass 的预处理，包括 harness 对
+   * `runAgentWorker` 的覆盖（覆盖实现必须首先调用此方法）。需要送达“接下来运行的任意父级 pass”的一次性提醒
+   * 都在这里处理。
    */
   protected prepareParentPassInput(input: AgentWorkerInput): AgentWorkerInput {
     const withheldAsk = this.withheldAskQuestions;
@@ -2948,17 +2892,15 @@ export class TurnRunner {
       await this.rerouteIfDue(agent, { prevTurnHint: input.prompt, signal: agent.signal });
       await agent.prompt(input.prompt, input.images);
       await this.retryConnectedTransportFallback(agent, () => visibleOutput);
-      // Single-shot recovery: if the provider rejected the first attempt
-      // with a context-overflow error, advance the sticky wire-shaping
-      // horizon so the next send carries roughly the newer half of
-      // history, then resume the same turn via `agent.continue()`.
-      // Continuing (rather than re-prompting) keeps the existing user
-      // message at the tail instead of appending a duplicate. A
-      // still-too-big second attempt falls through as `failed` — no
-      // further retries. Recovery arms a compaction classification, and the
-      // loop's prepareNextTurn only runs ahead of a turn that follows a
-      // completed one, so the retry consumes it here or it leaks into the
-      // next user turn.
+      // 单次恢复：如果 provider 因上下文溢出错误拒绝首次请求，
+      // 推进固定的 wire-shaping
+      // horizon，使下一次发送大致只携带较新的半段
+      // 历史，然后通过 `agent.continue()` 恢复同一个 turn。
+      // 继续而不是重新提示，可将现有用户
+      // 消息留在尾部，避免重复追加。若第二次尝试仍超出限制，则作为 `failed` 继续处理——不再
+      // 重试。恢复会设置压缩分类标记；循环的 prepareNextTurn 只会在已完成 turn 之后运行，
+      // 因此重试会在此处消费该标记，避免泄漏到
+      // 下一次用户 turn。
       if (await this.tryRecoverFromContextOverflow(agent)) {
         await this.rerouteIfDue(agent, { signal: agent.signal });
         await agent.continue();
@@ -2978,8 +2920,8 @@ export class TurnRunner {
       }
     } finally {
       unsubscribe();
-      // A control action closes this parent pass before pi drains its queues.
-      // Unconsumed commands remain in parentInputs for the next outer pass.
+      // 控制操作会在 pi 排空队列之前结束当前父级 pass。
+      // 未消费的命令会留在 parentInputs，供外层下一次 pass 处理。
       agent.clearAllQueues();
       this.piQueuedInputs.clear();
       this.setParentAgentRunning(false);
@@ -3026,44 +2968,42 @@ export class TurnRunner {
   }
 
   /**
-   * Inspect the most recent assistant message after a parent prompt and,
-   * when it carries a provider context-overflow error, mutate the agent
-   * state and the sticky `wireGuardHorizon` so that a subsequent re-prompt
-   * sends roughly the newer half of observable history.
+   * 检查父级 prompt 后最新的 assistant 消息；如果消息携带 provider 的上下文溢出错误，
+   * 则修改 Agent
+   * state 和固定的 `wireGuardHorizon`，使下一次重试
+   * 发送大约较新的半段可观察历史。
    *
-   * Returns `true` only when recovery actually happened — meaning the
-   * horizon advanced past at least one observable message. Callers use
-   * the return value as a single-shot gate: invoke once after the first
-   * `agent.prompt(...)` and, on `true`, resume the turn via
-   * `agent.continue()` exactly once. The helper never inspects the
-   * failing message again, so a second overflow on the retry falls
-   * through naturally as a `failed` turn.
+   * 只有实际完成恢复时才返回 `true`——也就是
+   * horizon 至少前进并淘汰了一条可观察消息。调用方将返回值用作一次性门控：首次
+   * `agent.prompt(...)` 后调用一次；若结果为 `true`，就通过
+   * `agent.continue()` 恰好恢复 turn 一次。此 helper 不会再次检查
+   * 失败消息，因此重试再次溢出时会自然按 `failed` turn
+   * 处理。
    *
-   * Mutations on success:
-   * - pops the failure assistant message that pi-agent pushed for the
-   *   overflow (an empty-text marker with `stopReason: "error"` and
-   *   `errorMessage`) so the retry's transcript does not carry it.
-   *   `agent.continue()`'s own run lifecycle resets `errorMessage`
-   *   before the retry, so we do not clear it here;
-   * - advances `this.wireGuardHorizon.evictionHorizon` to the smallest
-   *   value at which `findEvictionHorizon` reports the dispatched list
-   *   shrinks to at most `floor(n / 2)` observable messages, where `n`
-   *   excludes the failure message itself.
+   * 成功时的修改：
+   * - 弹出 pi-agent 为溢出错误追加的失败 assistant 消息
+   *   （空文本标记，带有 `stopReason: "error"` 和
+   *   `errorMessage`），避免重试的对话记录包含该消息。
+   *   `agent.continue()` 自己的运行生命周期会在重试
+   *   前重置 `errorMessage`，因此这里无需清除它；
+   * - 将 `this.wireGuardHorizon.evictionHorizon` 推进到最小值，使
+   *   `findEvictionHorizon` 报告派发列表缩小至最多 `floor(n / 2)` 条
+   *   可观察消息；其中 `n`
+   *   不包括失败消息本身。
    *
-   * Emits one informational `system` event describing the compaction so
-   * surfaces can show a notice. The message reports the *actual*
-   * post-eviction drop count (after `MIN_HISTORY_TAIL` clamping and
-   * orphan-head skipping), not the half-of-n target.
+   * 发出一条说明压缩情况的 `system` 信息事件，
+   * 供各界面显示通知。消息会报告淘汰后
+   * *实际*删除的数量（经过 `MIN_HISTORY_TAIL` 限制和
+   * 孤立头部跳过处理后），而不是 n 的一半这一目标值。
    *
-   * Returns `false` when:
-   * - the parent agent did not fail (`errorMessage` is unset);
-   * - the failure is not a context overflow (rate limit, transport
-   *   error, etc. — left as-is for the caller to surface);
-   * - no horizon advance is possible (e.g. the existing horizon already
-   *   covers every evictable message, or the history is too short to
-   *   satisfy `MIN_HISTORY_TAIL`). In those cases retrying with the
-   *   same context would still overflow, so we accept the failure
-   *   instead of paying a second pointless request.
+   * 以下情况返回 `false`：
+   * - 父级 Agent 未失败（未设置 `errorMessage`）；
+   * - 失败并非上下文溢出（例如速率限制、传输
+   *   错误等——留给调用方呈现）；
+   * - 无法推进 horizon（例如现有 horizon 已涵盖
+   *   所有可淘汰消息，或历史过短，无法满足
+   *   `MIN_HISTORY_TAIL`）。此时使用相同上下文重试仍会溢出，因此接受失败，
+   *   不再为第二次无用请求付费。
    */
   protected async tryRecoverFromContextOverflow(agent: Agent): Promise<boolean> {
     if (!agent.state.errorMessage) return false;
@@ -3072,9 +3012,9 @@ export class TurnRunner {
     if (!lastMessage || lastMessage.role !== "assistant") return false;
     if (!isContextOverflow(lastMessage, agent.state.model.contextWindow)) return false;
 
-    // Exclude the failure assistant message from the half-history
-    // calculation; only "real" prior turns should count toward the
-    // observable population the cut targets.
+    // 计算一半历史时，排除失败的 assistant 消息；
+    // 只有之前的“真实”回合才应计入
+    // 本次裁剪针对的可观察消息总数。
     const observable = stripObservationalContextMessages(messages.slice(0, -1));
     const target = Math.floor(observable.length / 2);
     const previousHorizon = this.wireGuardHorizon.evictionHorizon;
@@ -3101,32 +3041,25 @@ export class TurnRunner {
   }
 
   /**
-   * Retry transient upstream failures by popping the failed assistant
-   * message and continuing the same turn.
+   * 弹出失败的 assistant 消息并继续同一 turn，以重试上游的瞬时故障。
    *
-   * Triggers only when the last assistant message has `stopReason: "error"`
-   * and the error text matches a known gateway 5xx or transport-fault
-   * pattern (see `transient-error.ts`). Context-overflow recoveries already
-   * ran upstream and are skipped here; 4xx errors and rate limits are
-   * intentionally not retried because the same payload would fail again.
+   * 仅当最新 assistant 消息的 `stopReason: "error"`，且错误文本符合已知 gateway 5xx 或传输故障
+   * 模式（见 `transient-error.ts`）时触发。上下文溢出恢复已在上游处理，此处会跳过；4xx 错误和速率限制
+   * 不会重试，因为相同 payload 仍会失败。
    *
-   * Each `agent.continue()` retry runs with exponential backoff + jitter.
-   * Each retry emits an informational `system` event so callers can show
-   * "retrying after upstream error" in the UI. The retry counter resets
-   * whenever the agent makes forward progress between failures — if
-   * `agent.continue()` appends a successful intermediate message before
-   * the next failure tail, the next failure is treated as a fresh
-   * sequence and gets the full retry budget. As soon as the assistant
-   * message after a retry is no longer a transient failure (success or
-   * a different non-retryable error), the helper returns and lets the
-   * caller surface that outcome.
+   * 每次 `agent.continue()` 重试都会采用指数退避和随机抖动。
+   * 每次重试都会发出一条 `system` 信息事件，供调用方在 UI 中显示“上游错误后正在重试”。重试计数器会在
+   * Agent 于两次失败之间取得进展时重置——如果
+   * `agent.continue()` 在下一条失败消息之前追加了成功的中间消息，
+   * 下一次失败就作为新序列处理，并获得完整的重试预算。重试后只要 assistant
+   * 消息不再是瞬时故障（成功或
+   * 其他不可重试的错误），helper 就会返回，让调用方呈现
+   * 结果。
    *
-   * The loop has no explicit iteration cap because every iteration
-   * either reaches `maxAttempts` with no progress (terminates) or
-   * resets after real agent work (tool calls, tokens, bounded by
-   * pi-agent's own per-turn limits). A provider that can sustain
-   * infinite "progress + failure" cycles would already be billing the
-   * caller for real work each cycle — there is no free loop here.
+   * 循环没有显式迭代上限，因为每次迭代要么在没有进展时达到
+   * `maxAttempts`（并终止），要么在真实 Agent 工作后重置（工具调用、token 数，由
+   * pi-agent 自身每 turn 的限制约束）。若 provider 能持续产生无限次“进展 + 失败”，
+   * 调用方也会为每一轮真实工作付费——这里不存在免费的无限循环。
    */
   protected async retryTransientServerErrors(
     agent: Agent,
@@ -3147,25 +3080,24 @@ export class TurnRunner {
         level: "info",
         message: `Upstream error (${truncateForSystemMessage(reason)}); retrying in ${Math.round(delayMs / 100) / 10}s (attempt ${attempt + 1}/${policy.maxAttempts}).`,
       });
-      // pi-agent leaves the failure as the tail assistant message and
-      // keeps `errorMessage` set; popping it lets `agent.continue()`
-      // resume from the prior user/tool-result tail without sending the
-      // failure marker back to the provider.
+      // pi-agent 会把失败留作尾部 assistant 消息，并
+      // 保留 `errorMessage`；弹出该消息后，`agent.continue()`
+      // 便可从之前的用户/工具结果尾部继续，而不会把
+      // 失败标记发送回 provider。
       agent.state.messages.pop();
       const lengthBeforeContinue = agent.state.messages.length;
       await sleep(delayMs);
       await agent.continue();
-      // If `continue()` appended more than just a new failure tail
-      // (i.e. at least one intermediate assistant or tool message
-      // landed before the agent failed again), the agent made real
-      // progress between failures. Reset so the next failure gets a
-      // fresh retry budget instead of inheriting the running count.
+      // 如果 `continue()` 追加的不只是新的失败尾部
+      // （也就是说，在 Agent 再次失败前至少追加了一条中间 assistant 或工具消息），
+      // Agent 就在两次失败之间取得了真实进展。重置计数，使下一次失败获得
+      // 新的重试预算，而非继承当前计数。
       const messagesAppended = agent.state.messages.length - lengthBeforeContinue;
       attempt = messagesAppended > 1 ? 1 : attempt + 1;
     }
   }
 
-  /** Retry a connected-provider refusal on the next transport before any visible effect. */
+  /** 在产生任何可见效果前，遇到已连接 provider 拒绝请求时，尝试切换到下一个传输方式重试。 */
   protected async retryConnectedTransportFallback(
     agent: Agent,
     visibleOutput: () => boolean,
@@ -3212,10 +3144,9 @@ export class TurnRunner {
     }
     const session = this.memoryPersistence?.session;
     if (!session) return;
-    // The observer takes the model name and resolves it internally, but usage
-    // is attributed by resolved id so the memory slice matches the parent and
-    // state-agent entries in `usageByModel` (e.g. `openai/gpt-5.4-mini`) rather
-    // than mixing a shorthand in among resolved ids.
+    // 观察器接收 model 名称并在内部解析，但用量按解析后的 ID
+    // 归属，使记忆部分与父级及状态 Agent 在 `usageByModel` 中的记录一致（例如 `openai/gpt-5.4-mini`），
+    // 而不是在解析后的 ID 之间混入简写名称。
     const memoryModel = this.resolveMemoryActorModel(options);
     const resolvedMemoryModel = resolveMeteredModelName(memoryModel);
     const memoryModelId = resolvedMemoryModel.id;
@@ -3228,11 +3159,11 @@ export class TurnRunner {
       settings: this.config.memory,
       messages,
       cwd: this.config.cwd ?? process.cwd(),
-      // Observation/reflection work is part of the turn's cost. Fold it into
-      // the aggregate and emit a `usage` event so memory spend streams like
-      // every completion does — and so the last streamed event still equals
-      // the terminal aggregate even though memory runs after the parent's
-      // final `message_end`.
+      // 观察/反思工作属于 turn 成本。将其计入
+      // 总用量，并发出 `usage` 事件，使记忆开销像
+      // 每次完成一样实时显示；这样即使记忆工作在父级最后一个
+      // `message_end` 之后运行，最后一条流式事件仍会与
+      // 终止时的汇总用量相等。
       onUsage: (usage) => {
         this.recordUsage(usage, memoryModelId, resolvedMemoryModel.provider as TransportName);
         this.emitTurnUsage();
@@ -3240,32 +3171,28 @@ export class TurnRunner {
       onActivity: (event) => this.emit({ type: "memory", ...event }),
     });
 
-    // Compaction trigger: a reflection just replaced the durable
-    // observation set, so rebuild the frozen context pack to pick up
-    // the new condensed view. Observer-only updates intentionally do
-    // NOT refresh the pack — they leave the rendered prefix stable so
-    // the provider's prompt cache survives.
+    // 压缩触发：反思刚刚替换了持久化
+    // 观察记录集合，因此重建冻结的上下文包以载入
+    // 新的精简视图。只有观察、不含反思的更新不会
+    // 刷新上下文包——这样可保持渲染前缀稳定，使
+    // provider 的 prompt 缓存继续有效。
     if (refreshReflections && result.reflections.length > 0) {
       await this.refreshMemoryContextPack();
     }
   }
 
   /**
-   * Drain the unobserved tail into durable memory and refresh the
-   * frozen context pack so the post-eviction render carries an
-   * `<observation-group range=“…”>` covering what is about to be
-   * dropped. Called from every `findEvictionHorizon` site — the
-   * wire-shaping transform's `onCompaction`, `/compact`, and the
-   * context-overflow recovery path — so each one writes through the
-   * same observer with the same best-effort failure policy: a failed
-   * drain logs a `system` warning and eviction proceeds anyway.
+   * 将尚未观察的消息尾部排入持久化记忆，并刷新
+   * 冻结的上下文包，使淘汰后的渲染包含即将
+   * 被丢弃消息所对应的 `<observation-group range=“…”>`。每个 `findEvictionHorizon` 调用点都会执行此操作——包括
+   * wire-shaping 转换器的 `onCompaction`、`/compact` 和
+   * 上下文溢出恢复路径——以确保它们通过同一个观察器写入，并采用相同的尽力而为失败策略：排空失败时
+   * 会记录 `system` 警告，但仍继续淘汰。
    *
-   * Actor model resolution always uses the session config default
-   * (`config.memoryModel → DEFAULT_CLI_MEMORY_MODEL`) so every
-   * compaction path writes through the same observer regardless of
-   * which entry point triggered it. `/compact` does not honor a
-   * per-turn `--memory-model` override here — that override only
-   * affects the agent's reply, not the drain.
+   * actor model 始终使用 Session 配置默认值
+   * （`config.memoryModel → DEFAULT_CLI_MEMORY_MODEL`）解析，确保每条
+   * 压缩路径都通过相同的观察器写入，与触发入口无关。`/compact` 不会在此处采用
+   * 每 turn 的 `--memory-model` 覆盖值——该覆盖只影响 Agent 回复，不影响排空。
    */
   private async ensureMemoryCoverageForCompaction(messages: AgentMessage[]): Promise<void> {
     try {
@@ -3296,15 +3223,15 @@ export class TurnRunner {
         ...(this.config.sessionId !== undefined ? { sessionId: this.config.sessionId } : {}),
       });
     } catch {
-      // Pack rebuild is best-effort; the existing pack remains in
-      // place if this fails. Turn flow never blocks on memory work.
+      // 重建记忆包采用尽力而为策略；若失败，现有记忆包会
+      // 继续保留。turn 流程不会等待记忆工作。
     }
   }
 
   /**
-   * Memory model precedence: per-turn override → runner config → default.
-   * Exposed as a method so tests can verify the exact fallback chain that the
-   * memory observer ends up using.
+   * 记忆 model 的优先顺序：每 turn 覆盖值 → 运行器配置 → 默认值。
+   * 此方法对外开放，供测试验证记忆观察器实际使用的
+   * 精确回退顺序。
    */
   resolveMemoryActorModel(options: TurnOptions | undefined): string {
     return options?.memoryModel ?? this.config.memoryModel ?? DEFAULT_CLI_MEMORY_MODEL;
@@ -3317,16 +3244,14 @@ export class TurnRunner {
     const options = this.resolveTurnOptions(undefined, input.state.options);
     const initialRoute = input.router?.initialTarget({ hasImages: false });
     const model = resolveModelName(initialRoute?.modelName ?? options.model ?? DEFAULT_CLI_MODEL);
-    // Parent agent configuration is derived from start/session options, not
-    // per-prompt command options. For concrete selections the model stays
-    // stable for the whole session to protect prompt caching; routed sessions
-    // deliberately trade cache prefixes away when the ModelRouter swaps the
-    // model (per turn or via prepareNextTurn), with the classifier's
-    // instructions carrying the don't-switch-mid-task cache preference.
+    // 父级 Agent 配置取自 start/Session 选项，而非
+    // 每条 prompt 命令的选项。若选择具体 model，为保护 prompt 缓存，该 model 会在整个 Session 中
+    // 保持稳定；路由 Session 则会在 ModelRouter 更换
+    // model 时（每 turn 或通过 prepareNextTurn）有意放弃缓存前缀，并由分类器指令
+    // 携带“任务中途不要切换 model”的缓存偏好。
     let agent!: Agent;
     agent = new Agent({
-      // Dispatch comes from the model registry; the loop resolves no transport
-      // of its own.
+      // 派发由 model 注册表负责；循环本身不解析任何传输方式。
       streamFn: relayPiStreamFn,
       initialState: {
         model,
@@ -3368,11 +3293,10 @@ export class TurnRunner {
   }
 
   protected createMemoryTransform(memoryContext?: SubagentAgentConfigInput["memoryContext"]) {
-    // The memory transform owns history retention against both the token
-    // budget (context-window cost on smaller models) and the wire-byte
-    // budget (gateway request-body caps). It applies the sticky horizon
-    // first so subsequent turns reuse the same eviction decision and the
-    // provider prompt cache stays valid between eviction events.
+    // 记忆转换器负责保留历史，同时受 token
+    // 预算（小型 model 的上下文窗口成本）和 wire 字节
+    // 预算（gateway 请求体上限）约束。它会先应用固定 horizon，
+    // 使后续 turn 复用相同的淘汰决策，并让 provider prompt 缓存在淘汰事件之间保持有效。
     return createObservationalContextTransform({
       memory: this.memory,
       effectiveContext: () =>
@@ -3405,14 +3329,13 @@ export class TurnRunner {
     });
   }
 
-  // Sticky across all turns within this runner instance. Resets on
-  // session resume (new runner). Mutated in place by the memory transform
-  // when either the token or byte budget triggers eviction, and by
-  // `runAgentWorker` on a provider context-overflow error so the retry
-  // sends the newer half of history.
+  // 在此运行器实例的所有 turn 中保持固定。恢复 Session 时（创建新运行器）会重置。记忆转换器
+  // 在 token 或字节预算触发淘汰时原地修改此值；provider 上下文溢出错误也会由
+  // `runAgentWorker` 修改它，使重试
+  // 发送较新的半段历史。
   protected readonly wireGuardHorizon: WireGuardHorizon = createInitialHorizon();
 
-  /** Sticky only for repeated advisor projections; never persisted into executor state. */
+  /** 仅在重复的顾问投影间保持固定；不会持久化到执行器 state 中。 */
   protected readonly advisorWireGuardHorizon: WireGuardHorizon = createInitialHorizon();
 
   async getSkills(): Promise<readonly Skill[]> {
@@ -3421,10 +3344,9 @@ export class TurnRunner {
   }
 
   /**
-   * Re-discover installed skills and curated memory stores from disk. Surfaces
-   * newly added skills or edited memory files without restarting the runner.
-   * Callers typically pair this with `getSkills()` to refresh their
-   * autocomplete catalog.
+   * 从磁盘重新发现已安装技能和精选记忆存储。无需重启运行器即可呈现
+   * 新添加的技能或已编辑的记忆文件。调用方通常会将此方法与 `getSkills()` 配合，刷新
+   * 自动补全目录。
    */
   async reloadSkills(): Promise<readonly Skill[]> {
     await this.skillContext.reload();
@@ -3432,13 +3354,13 @@ export class TurnRunner {
     return this.skillContext.getSkills();
   }
 
-  /** System-prompt files (AGENTS.md by default) that resolved on disk for this session. */
+  /** 本 Session 在磁盘上解析到的 system prompt 文件（默认是 AGENTS.md）。 */
   async getResolvedAgentFiles(): Promise<readonly TurnAgentFile[]> {
     await this.ensureSkillsLoaded();
     return this.skillContext.getResolvedAgentFiles();
   }
 
-  /** Skill name collisions where one definition shadowed another during discovery. */
+  /** 技能发现过程中，一个定义覆盖另一个定义时出现的技能名称冲突。 */
   async getSkillCollisions(): Promise<readonly SkillCollision[]> {
     await this.ensureSkillsLoaded();
     return this.skillContext.getSkillCollisions();
@@ -3453,9 +3375,9 @@ export class TurnRunner {
   }
 
   /**
-   * Connect to remote MCP servers exactly once per session. Subsequent starts
-   * (e.g. resumed sessions) reuse the existing runtime so tool identity stays
-   * stable. The runtime is disposed in dispose().
+   * 每个 Session 只连接远程 MCP 服务器一次。后续启动
+   * （例如恢复的 Session）会复用现有运行时，确保工具标识
+   * 稳定。运行时会在 `dispose()` 中释放。
    */
   private async ensureMcpServersConnected(servers: TurnStartCommand["mcpServers"]): Promise<void> {
     if (this.mcpRuntime || !servers || Object.keys(servers).length === 0) return;
@@ -3466,16 +3388,15 @@ export class TurnRunner {
     if (this.memoryLoaded) return;
     this.memoryLoaded = true;
 
-    // Embedding client is built once per runner so connection reuse
-    // amortizes TLS setup across both the backfill worker and the
-    // recall_memory tool. The client lazily resolves OPENROUTER_API_KEY per
-    // call so adding the credential mid-session lights up retrieval without
-    // a runner restart.
+    // 每个运行器只构建一次 embedding 客户端，以便连接复用
+    // 能够分摊回填 worker 和
+    // `recall_memory` 工具的 TLS 初始化开销。客户端会在每次
+    // 调用时惰性解析 `OPENROUTER_API_KEY`，因此 Session 中途添加凭据后即可启用检索，无需重启运行器。
     //
-    // The file-backed pack loads alongside the database-backed pack so the
-    // first dispatched turn sees both frozen layers. Later database compaction
-    // triggers refresh only observations; explicit skills reload refreshes the
-    // file-backed layer.
+    // 基于文件的记忆包会与基于数据库的记忆包并行加载，确保
+    // 首次派发的 turn 同时看到两种冻结层。之后数据库压缩
+    // 只会触发观察记录层刷新；显式重新加载技能时才刷新
+    // 基于文件的层。
     const pinnedStoreLoad = this.refreshPinnedStoreContextPack();
     this.memoryPersistence = await loadStoredMemory(
       this.config.memoryDbPath,
@@ -3490,16 +3411,15 @@ export class TurnRunner {
           ),
           ...(this.config.sessionId !== undefined ? { sessionId: this.config.sessionId } : {}),
         },
-        // Surface quarantine recoveries to the UI. The directory is moved
-        // aside on the user's disk and a fresh database is opened in its
-        // place, so prior memories are gone from this session's recall
-        // until the user manually inspects the backup — without a system
-        // event the loss is silent.
+        // 向 UI 报告隔离恢复。原目录会在用户磁盘上移至
+        // 一旁，并在原位置创建新的数据库，因此在用户手动检查备份之前，
+        // 本 Session 的回忆功能无法访问之前的记忆；如果没有 system
+        // 事件提示，这种数据损失会悄无声息地发生。
         onWarn: (message) => {
-          // Cross-process lock contention: a concurrent relay-pi CLI held the
-          // memory db's open-lock past our wait budget, so this op was
-          // skipped. Surface once per occurrence so the user knows recall
-          // and observer writes are degraded for this turn.
+          // 跨进程锁竞争：另一个并发运行的 relay-pi CLI 持有
+          // memory db 打开锁的时间超过了等待预算，因此本次操作
+          // 被跳过。每次发生时都显示一次提示，让用户了解本 turn 的 recall
+          // 和观察器写入能力已降级。
           this.emit({ type: "system", level: "warn", message });
         },
         onRecover: ({ backupPath, cause }) => {
@@ -3515,7 +3435,7 @@ export class TurnRunner {
     await pinnedStoreLoad;
   }
 
-  /** Reload the frozen file-backed layer without touching database memory. */
+  /** 重新加载冻结的文件记忆层，不触及数据库记忆。 */
   private async refreshPinnedStoreContextPack(): Promise<void> {
     if (this.config.memoryStores === false) {
       this.memory.setStoredContextPack([]);
@@ -3523,8 +3443,8 @@ export class TurnRunner {
     }
     try {
       const base = this.config.cwd ?? process.cwd();
-      // Explicit entries may be relative; resolve them against the configured
-      // cwd like relative db and system-prompt paths, not the process cwd.
+      // 显式条目可能是相对路径；应相对于已配置的
+      // cwd 解析，与相对数据库路径和 system prompt 路径一致，而不是相对于进程 cwd。
       const stores = this.config.memoryStores
         ? this.config.memoryStores.map((store) => resolve(base, store))
         : await discoverMemoryStores(base);
@@ -3544,8 +3464,8 @@ export class TurnRunner {
   }
 
   /**
-   * Single source of truth for per-turn option precedence:
-   * explicit turn options → carried-over state base → runner config → defaults.
+   * 每 turn 选项优先顺序的唯一事实来源：
+   * 显式 turn 选项 → 从 state 继承的基础选项 → 运行器配置 → 默认值。
    */
   resolveTurnOptions(options?: TurnOptions, base?: TurnOptions): TurnOptions {
     return {
@@ -3580,7 +3500,7 @@ export class TurnRunner {
     }
   }
 
-  /** Attribute a non-parent model call and publish it once a flat context snapshot exists. */
+  /** 归属非父级 model 调用的用量；存在完整上下文快照后再发布。 */
   private recordAndEmitUsage(
     usage: TurnTokenUsage | Usage,
     modelId: string,
@@ -3618,8 +3538,8 @@ export class TurnRunner {
     }
     if (event.type !== "message_end" || event.message.role !== "assistant") return;
 
-    // Cache the parent's latest bar/breakdown so subsequent state-agent and
-    // terminal emissions can reuse it without rescaling against a stale base.
+    // 缓存父级最新的进度条/明细，使后续状态 Agent 和
+    // 终止事件能够复用，避免基于过时数据重新缩放。
     this.lastParentUsageSnapshot = {
       effectiveContextWindow: this.effectiveContextWindow(),
       contextWindowUsage: scaleContextWindowUsageToTotalTokens(
@@ -3629,13 +3549,12 @@ export class TurnRunner {
       lastMessageUsage: event.message.usage,
     };
 
-    // A turn is a loop of completion calls; fold this completion's usage into
-    // the running aggregate and emit a `usage` event now so a tool-heavy turn
-    // ticks cost per completion. This is the only place a real parent run
-    // records usage — a completion only ticks a `usage` event when it actually
-    // consumed tokens, so a rejected attempt (e.g. a provider context-overflow
-    // error the turn then recovers from) carries no usage and would otherwise
-    // emit a degenerate all-zero bar.
+    // 一个 turn 是一系列完成调用组成的循环；将本次完成的用量并入
+    // 持续汇总，并立即发出 `usage` 事件，使工具密集型 turn
+    // 能在每次完成时更新成本。这是唯一由真实父级运行记录用量的位置——只有完成实际
+    // 消耗了 token 才会发出 `usage` 事件，因此被拒绝的请求（例如 provider 上下文溢出
+    // 错误，随后由 turn 恢复）不会产生用量，否则将
+    // 显示一个全零进度条。
     this.recordUsage(
       event.message.usage,
       event.message.model,
@@ -3644,7 +3563,7 @@ export class TurnRunner {
     if (event.message.usage.totalTokens > 0) this.emitTurnUsage();
   }
 
-  /** Deliver one in-transcript orientation checkpoint without changing the public protocol. */
+  /** 在对话记录中投递一次方向检查点，不改变公开协议。 */
   private steerAdvisorOrientationIfDue(): void {
     const lifecycle = this.advisorTurnLifecycle;
     const routeStatus = this.modelRouter?.status();
@@ -3661,15 +3580,13 @@ export class TurnRunner {
   }
 
   /**
-   * Re-emit the context-window breakdown after `compact()` advances the
-   * eviction horizon. The bar's numerator is the latest parent
-   * `lastMessageUsage.totalTokens`, which still reflects the pre-compact
-   * wire tail; we re-estimate the per-segment occupancy against the new
-   * horizon, sum it for a synthetic total, and proportionally rescale the
-   * snapshot's `lastMessageUsage` so the bar moves immediately. The
-   * snapshot is updated in place so a follow-up state-agent emission
-   * before the next parent message_end keeps reading the post-compact
-   * shape instead of jittering back to stale values.
+   * 推进 `compact()` 的淘汰 horizon 后，重新发出上下文窗口明细。进度条的分子是最近一次父级
+   * `lastMessageUsage.totalTokens`，它仍反映压缩前的
+   * wire 消息尾部；我们会针对新 horizon 重新估算各分段占用，
+   * 求和得到合成总量，并按比例缩放
+   * 快照中的 `lastMessageUsage`，让进度条立即更新。
+   * 在下一次父级 message_end 之前，状态 Agent 发出的事件也会读取
+   * 更新后的快照，避免显示形状跳回过时值。
    */
   private emitPostCompactUsage(): void {
     if (!this.lastParentUsageSnapshot) return;
@@ -3689,9 +3606,9 @@ export class TurnRunner {
       cacheRead: scale(prior.cacheRead),
       cacheWrite: scale(prior.cacheWrite),
       totalTokens: newTotal,
-      // Cost is historical: the provider already billed for the
-      // pre-compact call, so we leave it intact rather than fabricating a
-      // smaller cost the user was never charged.
+      // 成本是历史值：provider 已经按
+      // 压缩前的调用计费，因此保留原值，而不是伪造一个
+      // 用户实际上并未支付的较低成本。
       cost: prior.cost,
     };
     const refreshedContextWindowUsage = scaleContextWindowUsageToTotalTokens(
@@ -3703,11 +3620,11 @@ export class TurnRunner {
       contextWindowUsage: refreshedContextWindowUsage,
       lastMessageUsage: refreshedMessageUsage,
     };
-    // `compact()` only runs between turns, so `this.turnUsage` is
-    // undefined here; emit a zero aggregate so `Session.applyUsageEvent`
-    // can still refresh `lastUsage`. Session cost was already credited
-    // at the prior terminal, so a zero `turnUsage.cost.total` does not
-    // lose any spend.
+    // `compact()` 只在 turn 之间运行，因此此处的 `this.turnUsage`
+    // 未定义；发出零汇总，仍可让 `Session.applyUsageEvent`
+    // 刷新 `lastUsage`。Session 成本已在上一次终止事件中入账，
+    // 因此 `turnUsage.cost.total` 为零不会
+    // 造成任何已产生费用丢失。
     const turnUsage = this.turnUsage ?? emptyTokenUsage();
     this.emit({
       type: "usage",
@@ -3720,12 +3637,11 @@ export class TurnRunner {
   }
 
   /**
-   * Emit a `usage` event reflecting the latest `this.turnUsage`. Reuses the
-   * most recent parent context-window snapshot for the bar/breakdown so
-   * mid-turn ticks (parent worker finish, state-agent finish) surface cost
-   * without jittering the parent context fields. Before the first parent
-   * completion, usage is recorded for the terminal and the first later usage
-   * event, but no incomplete wire event is emitted.
+   * 发出反映最新 `this.turnUsage` 的 `usage` 事件。复用
+   * 最近的父级上下文窗口快照作为进度条/明细数据，使
+   * turn 中途的更新（父级 worker 完成、状态 Agent 完成）能够呈现成本，
+   * 而不改变父级上下文字段。在首次父级完成之前，用量会被记录并计入终止结果及之后的第一条用量
+   * 事件，但不会发出不完整的 wire 事件。
    */
   protected emitTurnUsage(origin?: TurnEventOrigin): void {
     if (!this.turnUsage || !this.lastParentUsageSnapshot) return;
@@ -3741,22 +3657,20 @@ export class TurnRunner {
   }
 
   /**
-   * Estimate the per-segment occupancy of the parent agent's input before
-   * reconciliation with provider `totalTokens`. System prompt and memory
-   * packs use the same `ceil(chars / CHARS_PER_TOKEN)` heuristic as the memory pipeline so
-   * compaction triggers stay on the same scale as `MEMORY_BUDGET_RATIOS`.
+   * 估算父级 Agent 输入中各分段的占用，之后还会与 provider 的 `totalTokens`
+   * 对齐。system prompt 和记忆
+   * 包使用与记忆流水线相同的 `ceil(chars / CHARS_PER_TOKEN)` 估算方法，确保
+   * 压缩触发条件与 `MEMORY_BUDGET_RATIOS` 处于相同尺度。
    *
-   * The message tail uses {@link calculateWireTokens} over the
-   * post-eviction slice — the same slice the provider tokenized — so
-   * messages already dropped by wire-shaping stop counting against the
-   * `messages` segment instead of inflating it from the runner's full
-   * retained transcript. Text and structured blocks (`toolCall`, thinking,
-   * etc.) use `ceil(chars / CHARS_PER_TOKEN)`, and image blocks contribute a fixed
-   * per-image estimate rather than their base64 byte length.
+   * 消息尾部使用 {@link calculateWireTokens} 计算淘汰后的切片——这与 provider 实际分词的切片相同——因此
+   * wire-shaping 已删除的消息不会继续计入 `messages` 分段，也不会因为运行器保留的完整
+   * 对话记录而虚增。文本和结构化内容块（`toolCall`、thinking
+   * 等）按 `ceil(chars / CHARS_PER_TOKEN)` 估算；图像块按每张图像的固定估算值计入，
+   * 而不是按其 base64 字节长度计算。
    *
-   * `emitParentAgentEvent` rescales all four segments with
-   * {@link scaleContextWindowUsageToTotalTokens} so the emitted breakdown
-   * sums exactly to the API-reported `usage.totalTokens`.
+   * `emitParentAgentEvent` 会使用
+   * {@link scaleContextWindowUsageToTotalTokens} 重新缩放全部四个分段，确保发出的明细
+   * 总和恰好等于 API 报告的 `usage.totalTokens`。
    */
   protected estimateContextWindowUsage() {
     const agent = this.requireParentAgent();
@@ -3778,12 +3692,11 @@ export class TurnRunner {
   }
 
   /**
-   * Effective ceiling for the context-usage bar. The user-set
-   * `config.effectiveContext` (default `DEFAULT_EFFECTIVE_CONTEXT`) is clamped
-   * to the parent model's hard window so a user asking for more than the
-   * model can fit silently caps at the model's limit. Every memory budget is
-   * derived from this same number, so the bar is also the practical
-   * compaction ceiling.
+   * 上下文用量进度条的有效上限。用户设置的
+   * `config.effectiveContext`（默认值 `DEFAULT_EFFECTIVE_CONTEXT`）会限制在父级 model 的硬性上下文窗口内；
+   * 用户设置超过 model 容量时，会静默限制为 model 上限。所有记忆预算都
+   * 由同一个数值推导，因此该进度条也代表实际的
+   * 压缩上限。
    */
   protected effectiveContextWindow(): number {
     const modelWindow = this.requireParentAgent().state.model.contextWindow;
@@ -3791,18 +3704,18 @@ export class TurnRunner {
   }
 
   /**
-   * Resolve the user-set `effectiveContext` against an optional model window.
-   * Memory-pipeline callers that run before the parent agent exists (initial
-   * pack load, transform construction) pass `undefined` here and accept the
-   * unclamped user value; the agent-facing `effectiveContextWindow()` always
-   * passes the live model window.
+   * 根据可选的 model 窗口解析用户设置的 `effectiveContext`。
+   * 在父级 Agent 存在之前运行的记忆流水线调用方（初始
+   * 记忆包加载、转换器构建）会传入 `undefined`，并使用
+   * 未受限的用户值；面向 Agent 的 `effectiveContextWindow()` 则始终
+   * 传入实时 model 窗口。
    */
   protected resolveEffectiveContext(modelWindow?: number): number {
     const userValue = this.config.effectiveContext ?? DEFAULT_EFFECTIVE_CONTEXT;
     return modelWindow !== undefined ? Math.min(userValue, modelWindow) : userValue;
   }
 
-  /** Build the parent router from the loaded table and recovered selection. */
+  /** 根据已加载的路由表和恢复的选择构建父级路由器。 */
   private initializeModelRouter(modelName: string | undefined, table: RoutingTable): void {
     this.modelRouter = undefined;
     this.routingTable = table;
@@ -3828,9 +3741,9 @@ export class TurnRunner {
   }
 
   /**
-   * One classifier contract shared by parent routing and spawned children.
-   * The classifier reports the model id and transport it actually used, so
-   * both classifier paths attribute their spend the same way.
+   * 父级路由和已启动子项共用一份分类器契约。
+   * 分类器会报告实际使用的 model ID 和传输方式，因此
+   * 两条分类器路径会以相同方式归属其费用。
    */
   protected classifierOptions(table: RoutingTable): ClassifyRouteOptions {
     return {
@@ -3839,20 +3752,20 @@ export class TurnRunner {
     };
   }
 
-  /** True when a model name is owned by the validated project table. */
+  /** 当 model 名称由经过校验的项目表管理时返回 true。 */
   isVirtualModelSelection(modelName: string): boolean {
     return isVirtualModel(modelName, this.routingTable ?? BUILT_IN_ROUTING_TABLE);
   }
 
-  /** Read-only routing snapshot for session-owned UI surfaces. */
+  /** 供 Session 自有 UI 使用的只读路由快照。 */
   routeStatus(): RouterStatus | undefined {
     return this.modelRouter?.status();
   }
 
   /**
-   * Retarget subsequent parent turns while preserving the current in-flight turn.
-   * Concrete selections pin routing; virtual selections rebuild it so the next
-   * turn classifies from a fresh tier-local baseline.
+   * 重新指定后续父级 turn 的目标，同时保留当前正在执行的 turn。
+   * 具体选择会固定路由；虚拟选择会重建路由，使下一次
+   * turn 从该层级最新的基线重新分类。
    */
   setModel(modelName: string): { routed: boolean } {
     const routed = this.isVirtualModelSelection(modelName);
@@ -3884,14 +3797,14 @@ export class TurnRunner {
     agent.state.thinkingLevel = initial.thinkingLevel;
   }
 
-  /** Explicit virtual state models take the tier's default route without classifier latency. */
+  /** 显式指定的虚拟状态 model 会直接使用其层级的默认路由，不产生分类器延迟。 */
   private resolveStateModel(modelName: string | undefined) {
     if (!modelName || !this.isVirtualModelSelection(modelName)) return undefined;
     const table = this.routingTable ?? BUILT_IN_ROUTING_TABLE;
     return resolveTierDefault(table, modelName, { hasImages: false }, routingCatalogAdapter);
   }
 
-  /** Omitted child models inherit the parent's active concrete target, not its virtual setting. */
+  /** 省略的子项 model 会继承父级当前的具体目标，而不是父级的虚拟设置。 */
   private resolveSubagentInheritedOptions(): TurnOptions {
     const options = { ...this.requireRunnerState().options };
     if (!options.model || !this.isVirtualModelSelection(options.model)) return options;
@@ -3903,18 +3816,18 @@ export class TurnRunner {
     };
   }
 
-  /** Composition seam used by production binding and deterministic runner tests. */
+  /** 供生产绑定和确定性运行器测试使用的组合接缝。 */
   protected createModelRouter(options: ModelRouterOptions): ModelRouter {
     return new ModelRouter(options);
   }
 
-  /** Classify if a milestone or the cadence is due, and apply the resulting switch. */
+  /** 在里程碑或定期检查到期时进行分类，并应用分类结果中的切换。 */
   private async rerouteIfDue(agent: Agent, input: RouterPrepareInput) {
     const switched = await this.modelRouter?.prepareTurn(input);
     return switched ? await this.applyRouterSwitch(agent, switched) : undefined;
   }
 
-  /** Resolve and atomically apply one router-owned model/effort change. */
+  /** 解析并原子地应用一次由路由器管理的 model/推理强度变更。 */
   private async applyRouterSwitch(agent: Agent, switched: RouterSwitch) {
     const model = resolveModelName(switched.toModel);
     agent.state.model = model;
@@ -3965,9 +3878,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Cap an upstream-error excerpt to a short, single-line form before emitting
- * it as a `system` info message. Provider error payloads can be several
- * kilobytes of JSON; clipping keeps the retry notice readable.
+ * 截取上游错误的摘要，使其简短且仅占一行，再作为
+ * `system` 信息消息发出。Provider 错误 payload 可能包含数
+ * 千字节的 JSON；截断可确保重试通知易于阅读。
  */
 function truncateForSystemMessage(message: string, limit = 160): string {
   const flattened = message.replace(/\s+/g, " ").trim();
@@ -3975,7 +3888,7 @@ function truncateForSystemMessage(message: string, limit = 160): string {
   return `${flattened.slice(0, limit - 1)}…`;
 }
 
-/** Convert protocol-level prompt images into pi-ai `ImageContent` blocks. */
+/** 将协议层的 prompt 图像转换为 pi-ai `ImageContent` 内容块。 */
 function promptImagesToContent(images: TurnPromptImage[] | undefined): ImageContent[] {
   if (!images) return [];
   return images.map((image) => ({
@@ -3986,9 +3899,9 @@ function promptImagesToContent(images: TurnPromptImage[] | undefined): ImageCont
 }
 
 /**
- * Build a pi-agent user message from a prompt's text and optional images.
- * Plain-text prompts use the simple string-content shape; multimodal prompts
- * become a content array with the text part first and image blocks after.
+ * 根据 prompt 的文本和可选图像构造 pi-agent 用户消息。
+ * 纯文本 prompt 使用简单的字符串内容格式；多模态 prompt
+ * 则转换为内容数组，先放文本部分，再放图像块。
  */
 function buildUserAgentMessage(
   message: string,

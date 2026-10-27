@@ -34,24 +34,22 @@ import {
 } from "./auto-upgrade.js";
 
 export interface CliTurnConfigInput {
-  /** Resume preserves persisted selections unless a model flag explicitly overrides them. */
+  /** 恢复时保留已持久化的选择，除非显式传入模型参数覆盖它们。 */
   resume?: boolean;
   modelName?: string;
   memoryModelName?: string;
-  /** Disable both observational database memory and curated file-memory loading. */
+  /** 同时禁用观察式数据库记忆和精选文件记忆的加载。 */
   incognito?: boolean;
   /**
-   * Explicit memory database file path. When omitted, the config falls back
-   * to {@link DEFAULT_MEMORY_DB_PATH} (`~/.relay-pi/memory.db`). Ignored when
-   * `incognito` is true, which forces `memoryDbPath: false`.
+   * 显式指定记忆数据库文件路径。省略时，配置回退到
+   * {@link DEFAULT_MEMORY_DB_PATH}（`~/.relay-pi/memory.db`）。`incognito` 为 true 时忽略此字段，
+   * 并强制设置 `memoryDbPath: false`。
    */
   dbPath?: string;
   /**
-   * Caller-owned session id used to attribute memory writes. The TUI path
-   * sets it from the active `SessionManager` session; `relay-pi --rpc` sets it
-   * from the `--session <id>` spawn flag. When set, every observation written
-   * during the process carries this id as its `session_id`, which is the axis
-   * session-scoped recall filters on.
+   * 由调用方持有的 Session ID，用于归属记忆写入。TUI 路径从活动的 `SessionManager` Session 设置它；
+   * `relay-pi --rpc` 则从 `--session <id>` 启动参数设置它。进程写入的每条 observation 都会携带此 ID
+   * 作为 `session_id`，这是 Session 范围 recall 筛选所依据的轴。
    */
   sessionId?: string;
   workDir: string;
@@ -66,7 +64,7 @@ export interface CliTurnConfigResolution {
 }
 
 export interface ProjectCliTurnConfigResolution extends CliTurnConfigResolution {
-  /** Validated complete replacement used for defaults and virtual-name checks at boot. */
+  /** 用于默认值和启动时虚拟名称检查的、经过完整校验的替换配置。 */
   routingTable: RoutingTable;
 }
 
@@ -76,18 +74,15 @@ export interface PackageMetadata {
 }
 
 /**
- * Decide whether to render the interactive TUI vs the one-shot streaming
- * path. The TUI runs only when the terminal is interactive and the caller
- * did not supply a prompt argument; otherwise we run a single turn against
- * the SessionManager and exit when it settles.
+ * 决定显示交互式 TUI，还是使用一次性的流式路径。只有终端可交互且调用方未提供 prompt 参数时
+ * 才运行 TUI；否则通过 SessionManager 执行一次 turn，并在其结束后退出。
  */
 export function shouldUseTui(input: { interactive: boolean; prompt?: string }): boolean {
   return input.interactive && !input.prompt;
 }
 
 /**
- * Build the {@link TurnRunnerConfig} the CLI hands to the SessionManager,
- * along with the resolutions used to render model provenance lines.
+ * 构建 CLI 传给 SessionManager 的 {@link TurnRunnerConfig}，同时返回用于显示模型来源的解析结果。
  */
 export function buildCliTurnConfig(
   input: CliTurnConfigInput,
@@ -115,7 +110,7 @@ export function buildCliTurnConfig(
   };
 }
 
-/** Load the project routing table once, then resolve the complete boot configuration against it. */
+/** 只加载一次项目路由表，然后据此解析完整的启动配置。 */
 export async function buildProjectCliTurnConfig(
   input: CliTurnConfigInput,
   dotenvKeys: Set<string>,
@@ -131,16 +126,13 @@ export async function buildProjectCliTurnConfig(
 }
 
 /**
- * Default `relay-pi` invocation: parse flags, load env files, build the config,
- * decide TUI vs JSON output, then drive the SessionManager through one
- * session. Prints a resume hint at the end whether the session terminated
- * cleanly or not.
+ * 默认的 `relay-pi` 调用：解析参数、加载环境文件、构建配置、决定使用 TUI 还是 JSON 输出，
+ * 然后通过一个 Session 驱动 SessionManager。无论 Session 是否正常结束，最后都会打印恢复提示。
  */
 export async function runRunCommand(args: string[], pkg: PackageMetadata): Promise<void> {
   let modelName: string | undefined;
   let memoryModelName: string | undefined;
-  // Raw value of --provider so we can both pin the default model below and
-  // surface a clearer error if --model was also passed.
+  // 保存 --provider 的原始值，以便在下方固定默认模型，并在同时传入 --model 时给出更清晰的错误。
   let providerFlag: string | undefined;
   let workDir = process.cwd();
   let resumeSessionId: string | undefined;
@@ -216,7 +208,7 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
         noAutoUpgrade = true;
         break;
       case "--no-skill-sync":
-        // Deprecated no-op; tolerated so host scripts that pass it do not break.
+        // 已弃用的空操作；保留此参数，以免宿主脚本传入它时中断。
         break;
       case "--version":
       case "-v":
@@ -236,13 +228,11 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
     }
   }
 
-  // `let prompt: string | undefined` so the inline-slash applier can
-  // unset it when the whole prompt was just slash commands (e.g.
-  // `relay-pi "/model X"`) — mirrors the TUI's whole-message dispatcher
-  // skipping the agent turn entirely.
+  // 使用 `string | undefined`，这样内联 slash 命令处理器可以在整个 prompt 只有 slash 命令时将其清空
+  //（例如 `relay-pi "/model X"`），与 TUI 的整条消息分发器跳过 Agent turn 的行为保持一致。
   let prompt: string | undefined = promptParts.join(" ");
 
-  // Read from stdin if no prompt is provided
+  // 未提供 prompt 时从 stdin 读取。
   if (!prompt && !interactive) {
     const chunks: Buffer[] = [];
     for await (const chunk of process.stdin) {
@@ -265,26 +255,20 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
     if (!provider) {
       fail(`Unknown provider: ${providerFlag}. Accepted values: ${PROVIDER_SHORTHANDS.join(", ")}`);
     }
-    // Pin both the chat and memory models to this provider's catalog entry
-    // so resolution skips the env-var inference that would otherwise pick
-    // a different provider when multiple keys are present.
+    // 将聊天模型和记忆模型都固定到该 provider 的目录条目，避免在同时存在多个密钥时，解析过程
+    // 通过环境变量推断出其他 provider。
     modelName = pinnedDefaultModel(provider);
     memoryModelName = pinnedMemoryModel(provider);
   }
 
   const dotenvKeys = loadCliEnvFiles(workDir, envFilePath);
 
-  // Probe the registry and (if newer) run the package manager in-process
-  // while the TUI is already mounted. The TUI subscribes to upgradeStatus$
-  // to render a live header line; the JSON path awaits the final status
-  // and prints one summary line to stderr.
+  // 在 TUI 已挂载时探测 registry，并在有新版本时让包管理器在进程内运行。TUI 订阅
+  // upgradeStatus$ 来渲染实时的标题栏信息；JSON 路径等待最终状态，并将一行摘要写入 stderr。
   //
-  // Auto-upgrade is gated on having a TTY: non-interactive invocations
-  // (e.g. `relay-pi <prompt>` exec'd by a sandbox terminal channel) often get
-  // their whole process tree torn down as soon as the command "finishes",
-  // which kills the detached npm child mid-rename and leaves the global
-  // node_modules tree in a partial state (`relay-pi/.agent-<random>`
-  // staging dirs with no `agent` symlink).
+  // 自动升级要求有 TTY：非交互调用（例如由沙箱终端通道执行的 `relay-pi <prompt>`）在命令
+  //“结束”后经常会立即结束整个进程树，从而杀掉正在重命名中的 npm 子进程，导致全局
+  // node_modules 树处于不完整状态（`relay-pi/.agent-<random>` 暂存目录存在但没有 `agent` 符号链接）。
   const nonInteractive = !process.stdin.isTTY && !process.stdout.isTTY;
   const upgradeStatus$ = createUpgradeStatusStream();
   const upgradePromise = runAutoUpgrade({
@@ -317,11 +301,9 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
 
   const useTui = shouldUseTui({ interactive, prompt });
 
-  // Apply inline `/model` and `/thinking` commands embedded in the
-  // non-TUI one-shot prompt before we hand the prompt to the session.
-  // The prompt text itself is passed through to the agent verbatim,
-  // mirroring how the TUI keeps the slash form in the message and how
-  // `/skill-name` references survive the dispatch.
+  // 在将 prompt 交给 Session 之前，处理非 TUI 一次性 prompt 中嵌入的 `/model` 和 `/thinking` 命令。
+  // prompt 文本本身会原样传给 Agent；这与 TUI 保留消息中的 slash 形式，以及保留 `/skill-name`
+  // 引用的行为一致。
   if (!useTui && prompt) {
     const configuredModel = config.model;
     const { residue } = applyInlineSlashCommandsToCliConfig(
@@ -330,24 +312,18 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
       (line) => process.stderr.write(line),
       routingTable,
     );
-    // Sync the cached display name so the boot summary lines reflect any
-    // inline override, including whether the retained selection is routed.
+    // 同步缓存的显示名称，使启动摘要信息反映任何内联覆盖，包括当前保留的选择是否仍由路由决定。
     modelName = config.model ?? modelName;
     if (config.model !== configuredModel) {
       modelResolution = resolveCliModel(modelName, dotenvKeys, routingTable);
     }
-    // Dispatch the prompt with the slash forms stripped out. When the
-    // whole prompt was just slash commands (e.g. `relay-pi "/model X"`),
-    // the residue is empty and we skip the agent turn entirely —
-    // mirrors the TUI's whole-message dispatcher returning before
-    // reaching dispatchTurn.
+    // 分发 prompt 时去掉 slash 命令。当整个 prompt 只有 slash 命令时（例如 `relay-pi "/model X"`），
+    // residue 为空，因此完全跳过 Agent turn；这与 TUI 的整条消息分发器在进入 dispatchTurn 前返回的行为一致。
     prompt = residue.length > 0 ? residue : undefined;
   }
 
-  // One-shot consumers want a single summary line, not a streaming status.
-  // Await the final upgrade status and print the human-readable form (if any)
-  // before the regular boot lines. The TUI subscribes to the live stream
-  // instead and renders intermediate "Checking…/Updating…" states inline.
+  // 一次性调用只需要一行摘要，不需要流式状态。等待最终的升级状态，并在常规启动信息前打印人类可读的提示
+  //（如果有）。TUI 则订阅实时流，并在界面中渲染“检查中……/更新中……”等中间状态。
   if (!useTui) {
     const finalStatus = await upgradePromise;
     const notice = describeUpgradeStatus(pkg.name, finalStatus);
@@ -366,17 +342,15 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
     memoryModel: config.memoryModel ?? memoryModelResolution.modelName,
   });
   if (!useTui) {
-    // Non-TUI runs (one-shot prompt, piped stdin) stream events as JSONL so
-    // CI scripts can parse them. The TUI subscribes to its own rendering
-    // pipeline and has no use for stdout JSONL.
+    // 非 TUI 运行（一次性 prompt、管道 stdin）以 JSONL 形式流式输出事件，便于 CI 脚本解析。
+    // TUI 使用自己的渲染管线，不需要 stdout 上的 JSONL。
     manager.subscribe(({ event }) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
     });
   }
 
-  // Ensure PGlite gets a chance to flush its WAL on Ctrl+C / SIGTERM. The
-  // `finally` block below handles normal returns and thrown errors, but
-  // signals bypass it and would otherwise leave the memory database dirty.
+  // 确保在 Ctrl+C / SIGTERM 时 PGlite 有机会刷新 WAL。下面的 `finally` 会处理正常返回和抛出错误的情况，
+  // 但信号会绕过它；如果没有这里的处理，记忆数据库可能处于不干净状态。
   const removeShutdownHandlers = installShutdownHandlers(() => manager.dispose());
 
   try {
@@ -391,19 +365,16 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
     if (resumeSessionId) {
       if (modelResolution.source !== "explicit") session.config.model = undefined;
       if (memoryModelResolution.source !== "explicit") session.config.memoryModel = undefined;
-      // Force-load the persisted state.json so setup hands the resumed
-      // state to the runner and any TUI history replays before new turns.
+      // 强制加载持久化的 state.json，使 setup 能将恢复后的状态交给 runner，并让 TUI 在新 turn 前回放历史。
       await session.hydrate();
       if (!session.getState()) {
         throw new Error(`Unknown session: ${resumeSessionId}`);
       }
-      // Setup runs against the hydrated state; manager.create() already
-      // dispatched setup for fresh sessions.
+      // setup 会针对 hydrate 后的状态运行；对于新建 Session，manager.create() 已经分发了 setup。
       await session.start();
       modelName = session.config.model ?? modelName;
       memoryModelName = session.config.memoryModel ?? memoryModelName;
-      // Explicit launch preferences survive clear and subsequent picker resumes,
-      // including concrete selections recovered from an older saved command.
+      // 显式的启动偏好会在 clear 和后续通过选择器恢复时继续生效，包括从旧保存命令中恢复的具体选择。
       if (modelResolution.source === "explicit") manager.config.model = modelName;
       if (memoryModelResolution.source === "explicit") manager.config.memoryModel = memoryModelName;
       if (!useTui) {
@@ -426,12 +397,10 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
       await session.waitForTerminal();
     }
 
-    // Live session pointer for the TUI loop below. Starts as the boot-time
-    // session (fresh or `--resume <id>`-hydrated) and gets re-pointed each
-    // time the user picks a "pick up the thread" row in the starter menu.
-    // Same code path as `--resume <id>` from the command line: dispose the
-    // current session, `manager.resume(newId)` + `hydrate()` + `start()`,
-    // re-enter `runTui` with the hydrated session and its message history.
+    // TUI 循环使用的活动 Session 指针。初始指向启动时创建的 Session（新建或通过 `--resume <id>` 恢复），
+    // 每次用户从启动菜单选择“继续会话”时都会重新指向新的 Session。
+    // 它与命令行的 `--resume <id>` 使用同一条路径：释放当前 Session，执行
+    // `manager.resume(newId)`、`hydrate()` 和 `start()`，再用已 hydrate 的 Session 及其消息历史重新进入 `runTui`。
     let activeSession = session;
     let activeHistory = resumedHistory;
     let activeIsResume = Boolean(resumeSessionId);
@@ -470,10 +439,8 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
         });
 
         if (pendingClear) {
-          // `/clear` from the slash dispatcher: drop the current session
-          // (flushing state.json) and start a fresh one. The new session
-          // boots with starters visible — same as launching `relay-pi`
-          // without `--resume`.
+          // slash 分发器触发 `/clear`：释放当前 Session（刷新 state.json），然后创建新的 Session。
+          // 新 Session 会显示启动项，行为与不带 `--resume` 启动 `relay-pi` 相同。
           await activeSession.dispose();
           activeSession = manager.create(config.mode ? { mode: config.mode } : {});
           await activeSession.start();
@@ -484,10 +451,8 @@ export async function runRunCommand(args: string[], pkg: PackageMetadata): Promi
 
         if (!pendingResumeSessionId) break;
 
-        // User picked a recent session from the starter menu. Swap the
-        // placeholder for the requested session: dispose first so its
-        // state.json gets flushed, then hydrate the resume target so
-        // `agent.messages` is available for transcript replay.
+        // 用户从启动菜单选择了最近的 Session。先释放当前 Session，以便刷新其 state.json；然后 hydrate
+        // 目标 Session，使 `agent.messages` 可用于转录回放。
         await activeSession.dispose();
         activeSession = manager.resume(pendingResumeSessionId);
         if (modelResolution.source !== "explicit") activeSession.config.model = undefined;
